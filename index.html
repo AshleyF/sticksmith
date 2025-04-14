@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Drum Beat Detector</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; padding-top: 50px; }
+        #status { margin-top: 20px; font-size: 1.5em; }
+        .beat { color: green; }
+        .no-beat { color: red; }
+    </style>
+</head>
+<body>
+
+<h1>Drum Beat Detector</h1>
+<button id="startBtn">Start Detection</button>
+<div id="status"></div>
+
+<script>
+let audioContext;
+let analyser;
+let dataArray;
+let bufferLength;
+let source;
+let detecting = false;
+
+const startBtn = document.getElementById('startBtn');
+const statusDiv = document.getElementById('status');
+
+startBtn.onclick = async () => {
+    if (detecting) return;
+
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+    source = audioContext.createMediaStreamSource(stream);
+    analyser = audioContext.createAnalyser();
+
+    source.connect(analyser);
+    analyser.fftSize = 2048;
+    bufferLength = analyser.frequencyBinCount;
+    dataArray = new Uint8Array(bufferLength);
+
+    detecting = true;
+    detectBeat();
+};
+
+function detectBeat() {
+    analyser.getByteTimeDomainData(dataArray);
+
+    let sum = 0;
+    for (let i = 0; i < bufferLength; i++) {
+        const val = (dataArray[i] - 128) / 128;
+        sum += val * val;
+    }
+
+    const volume = Math.sqrt(sum / bufferLength);
+
+    if (volume > 0.1) { // Adjust sensitivity here
+        statusDiv.textContent = 'Beat Detected!';
+        statusDiv.className = 'beat';
+    } else {
+        statusDiv.textContent = 'No Beat';
+        statusDiv.className = 'no-beat';
+    }
+
+    requestAnimationFrame(detectBeat);
+}
+</script>
+
+</body>
+</html>
