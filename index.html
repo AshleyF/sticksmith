@@ -14,6 +14,11 @@
 <button id="startBtn">Start Detection</button><br />
 <canvas id="volumeCanvas" width="500" height="5"></canvas><br />
 <canvas id="timeSeriesCanvas" width="800" height="100"></canvas><br />
+<button id="metronomeBtn">Start Metronome</button><br />
+<label for="metronomeRate">Metronome Rate (BPM): </label>
+<input type="range" id="metronomeRate" min="40" max="240" value="120" step="1">
+<span id="metronomeRateValue">120</span> BPM<br />
+<button id="syncMetronomeBtn">Sync Metronome</button><br />
 
 <script>
 let audioContext;
@@ -33,6 +38,73 @@ const timeSeriesData = new Array(timeSeriesCanvas.width).fill(0);
 
 let previousVolume = 0; // Track the previous volume
 
+let metronomeInterval;
+let metronomeRunning = false;
+
+let metronomeTicks = []; // Array to store positions of metronome tick lines
+
+// Metronome elements
+const metronomeBtn = document.getElementById('metronomeBtn');
+const metronomeRate = document.getElementById('metronomeRate');
+const metronomeRateValue = document.getElementById('metronomeRateValue');
+
+// Set default BPM to 80
+metronomeRate.value = 80; // Default slider value
+metronomeRateValue.textContent = 80; // Default displayed value
+
+// Update the displayed BPM value and adjust the metronome speed dynamically
+metronomeRate.oninput = () => {
+    metronomeRateValue.textContent = metronomeRate.value;
+
+    if (metronomeRunning) {
+        clearInterval(metronomeInterval);
+        const interval = 60000 / metronomeRate.value;
+        metronomeInterval = setInterval(() => {
+            playMetronomeClick();
+        }, interval);
+    }
+};
+
+// Start/Stop the metronome
+metronomeBtn.onclick = () => {
+    if (metronomeRunning) {
+        clearInterval(metronomeInterval);
+        metronomeRunning = false;
+        metronomeBtn.textContent = 'Start Metronome';
+    } else {
+        const interval = 60000 / metronomeRate.value; // Convert BPM to milliseconds
+        metronomeInterval = setInterval(() => {
+            playMetronomeClick();
+        }, interval);
+        metronomeRunning = true;
+        metronomeBtn.textContent = 'Stop Metronome';
+    }
+};
+
+// Play a metronome click sound
+function playMetronomeClick() {
+    if (!audioContext) {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)(); // Initialize if not already done
+    }
+
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+
+    oscillator.type = 'triangle'; // Use 'triangle' or 'sine' for a click-like sound
+    oscillator.frequency.setValueAtTime(2000, audioContext.currentTime); // Higher frequency for a sharper click
+    gainNode.gain.setValueAtTime(0.2, audioContext.currentTime); // Adjust volume
+    gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.05); // Fade out quickly
+
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+
+    oscillator.start();
+    oscillator.stop(audioContext.currentTime + 0.05); // Short duration for a click-like sound
+
+    // Add a metronome tick to the array
+    metronomeTicks.push(timeSeriesCanvas.width - 1); // Add tick at the rightmost edge
+}
+
 startBtn.onclick = async () => {
     if (detecting) return;
 
@@ -51,9 +123,95 @@ startBtn.onclick = async () => {
     detectBeat();
 };
 
+let beatTimestamps = []; // Array to store timestamps of detected beats
+
+// Sync Metronome Button
+syncMetronomeBtn.onclick = async () => {
+    // Stop the metronome if it's running
+    if (metronomeRunning) {
+        clearInterval(metronomeInterval);
+        metronomeRunning = false;
+        metronomeBtn.textContent = 'Start Metronome';
+    }
+
+    // Start the beat detector if it's not already running
+    if (!detecting) {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+        source = audioContext.createMediaStreamSource(stream);
+        analyser = audioContext.createAnalyser();
+
+        source.connect(analyser);
+        analyser.fftSize = 2048;
+        bufferLength = analyser.frequencyBinCount;
+        dataArray = new Uint8Array(bufferLength);
+
+        detecting = true;
+        detectBeat();
+    }
+
+    // Clear previous timestamps
+    beatTimestamps = [];
+    let previousBeatThreshold = beatThreshold; // Store the previous threshold for debugging
+    beatThreshold = 0.5; // Increase the threshold for syncing TODO: config
+    const requiredBeats = 4; // Wait for 4 beats
+    const minInterval = 200; // Minimum interval in milliseconds (300 BPM = 200ms)
+
+    // Introduce a short delay before starting to listen for beats
+    setTimeout(() => {
+        const syncListener = () => {
+            // Check if beats are detected too close together
+            if (beatTimestamps.length > 1) {
+                const lastInterval = beatTimestamps[beatTimestamps.length - 1] - beatTimestamps[beatTimestamps.length - 2];
+                if (lastInterval < minInterval) {
+                    console.warn('Beats detected too close together. Restarting...');
+                    beatTimestamps = []; // Reset and start over
+                    return requestAnimationFrame(syncListener);
+                }
+            }
+
+            // Stop listening once the required number of beats is detected
+            if (beatTimestamps.length >= requiredBeats) {
+                if (beatTimestamps.length > 1) {
+                    const intervals = [];
+                    for (let i = 1; i < beatTimestamps.length; i++) {
+                        intervals.push(beatTimestamps[i] - beatTimestamps[i - 1]);
+                    }
+                    const averageInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+                    const bpm = Math.round(60000 / averageInterval);
+
+                    // Set the metronome rate and start it
+                    metronomeRate.value = bpm;
+                    metronomeRateValue.textContent = bpm;
+                    metronomeBtn.textContent = 'Stop Metronome';
+                    const interval = 60000 / bpm;
+                    metronomeInterval = setInterval(() => {
+                        playMetronomeClick();
+                    }, interval);
+                    metronomeRunning = true;
+                    beatThreshold = previousBeatThreshold; // Reset the threshold to the previous value
+                } else {
+                    console.warn('Not enough beats detected to sync the metronome.');
+                    beatTimestamps = []; // Reset and start over
+                    return requestAnimationFrame(syncListener);
+                }
+                return;
+            }
+
+            // Continue listening for beats
+            requestAnimationFrame(syncListener);
+        };
+
+        syncListener();
+    }, 500); // Delay of 500ms to avoid detecting the button click sound
+};
+
+let beatThreshold = 0.05; // Adjust this threshold as needed
+
+// Modify detectBeat to record timestamps of sharp beats
 function detectBeat() {
     const amplification = 5;
-    const beatThreshold = 0.05; // Adjust this threshold as needed
     const beatRampThreshold = 2;
 
     analyser.getByteTimeDomainData(dataArray);
@@ -71,6 +229,11 @@ function detectBeat() {
     const isSharpBeat = amplifiedVolume > previousVolume * beatRampThreshold; // Adjust sensitivity as needed
     previousVolume = amplifiedVolume;
 
+    // Record timestamp of sharp beats
+    if (isSharpBeat) {
+        beatTimestamps.push(performance.now());
+    }
+
     // Update instantaneous volume canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = isSharpBeat ? 'red' : 'blue'; // Highlight sharp beats with red
@@ -80,7 +243,21 @@ function detectBeat() {
     timeSeriesData.push(amplifiedVolume);
     timeSeriesData.shift();
 
+    // Clear the canvas
     timeCtx.clearRect(0, 0, timeSeriesCanvas.width, timeSeriesCanvas.height);
+
+    // Draw green metronome tick lines
+    timeCtx.strokeStyle = 'green';
+    timeCtx.lineWidth = 1;
+    metronomeTicks = metronomeTicks.map((x) => x - 1).filter((x) => x >= 0); // Move ticks left
+    metronomeTicks.forEach((x) => {
+        timeCtx.beginPath();
+        timeCtx.moveTo(x, 0);
+        timeCtx.lineTo(x, timeSeriesCanvas.height);
+        timeCtx.stroke();
+    });
+
+    // Draw the time-series data
     timeCtx.beginPath();
     timeCtx.moveTo(0, timeSeriesCanvas.height - timeSeriesData[0] * timeSeriesCanvas.height);
     for (let i = 1; i < timeSeriesData.length; i++) {
