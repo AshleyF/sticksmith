@@ -4,17 +4,16 @@
     <meta charset="UTF-8">
     <title>Drum Beat Detector</title>
     <style>
-        body { font-family: sans-serif; text-align: center; padding-top: 50px; }
-        #status { margin-top: 20px; font-size: 1.5em; }
-        .beat { color: green; }
-        .no-beat { color: red; }
+        body { font-family: sans-serif; text-align: center; padding-top: 30px; }
+        canvas { border: 1px solid #ddd; margin-top: 20px; }
     </style>
 </head>
 <body>
 
 <h1>Drum Beat Detector</h1>
-<button id="startBtn">Start Detection</button>
-<div id="status"></div>
+<button id="startBtn">Start Detection</button><br />
+<canvas id="volumeCanvas" width="500" height="5"></canvas><br />
+<canvas id="timeSeriesCanvas" width="800" height="100"></canvas><br />
 
 <script>
 let audioContext;
@@ -23,9 +22,16 @@ let dataArray;
 let bufferLength;
 let source;
 let detecting = false;
+const canvas = document.getElementById('volumeCanvas');
+const ctx = canvas.getContext('2d');
 
 const startBtn = document.getElementById('startBtn');
-const statusDiv = document.getElementById('status');
+
+const timeSeriesCanvas = document.getElementById('timeSeriesCanvas');
+const timeCtx = timeSeriesCanvas.getContext('2d');
+const timeSeriesData = new Array(timeSeriesCanvas.width).fill(0);
+
+let previousVolume = 0; // Track the previous volume
 
 startBtn.onclick = async () => {
     if (detecting) return;
@@ -46,6 +52,10 @@ startBtn.onclick = async () => {
 };
 
 function detectBeat() {
+    const amplification = 5;
+    const beatThreshold = 0.05; // Adjust this threshold as needed
+    const beatRampThreshold = 2;
+
     analyser.getByteTimeDomainData(dataArray);
 
     let sum = 0;
@@ -55,13 +65,43 @@ function detectBeat() {
     }
 
     const volume = Math.sqrt(sum / bufferLength);
+    const amplifiedVolume = volume * amplification; // Amplify the volume
 
-    if (volume > 0.1) { // Adjust sensitivity here
-        statusDiv.textContent = 'Beat Detected!';
-        statusDiv.className = 'beat';
-    } else {
-        statusDiv.textContent = 'No Beat';
-        statusDiv.className = 'no-beat';
+    // Detect rising edge of a sharp beat
+    const isSharpBeat = amplifiedVolume > previousVolume * beatRampThreshold; // Adjust sensitivity as needed
+    previousVolume = amplifiedVolume;
+
+    // Update instantaneous volume canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = isSharpBeat ? 'red' : 'blue'; // Highlight sharp beats with red
+    ctx.fillRect(0, 0, amplifiedVolume * canvas.width, canvas.height);
+
+    // Update time-series canvas
+    timeSeriesData.push(amplifiedVolume);
+    timeSeriesData.shift();
+
+    timeCtx.clearRect(0, 0, timeSeriesCanvas.width, timeSeriesCanvas.height);
+    timeCtx.beginPath();
+    timeCtx.moveTo(0, timeSeriesCanvas.height - timeSeriesData[0] * timeSeriesCanvas.height);
+    for (let i = 1; i < timeSeriesData.length; i++) {
+        timeCtx.lineTo(i, timeSeriesCanvas.height - timeSeriesData[i] * timeSeriesCanvas.height);
+    }
+    timeCtx.strokeStyle = 'blue';
+    timeCtx.stroke();
+
+    // Draw vertical lines for sharp beats
+    previousVolume = 0;
+    for (let i = 1; i < timeSeriesData.length; i++) {
+        let vol = timeSeriesData[i];
+        const isSharpBeat = vol > beatThreshold && vol > previousVolume * beatRampThreshold;
+        previousVolume = vol;
+        if (isSharpBeat) {
+            timeCtx.beginPath();
+            timeCtx.moveTo(i, timeSeriesCanvas.height);
+            timeCtx.lineTo(i, timeSeriesCanvas.height - vol * timeSeriesCanvas.height);
+            timeCtx.strokeStyle = 'red';
+            timeCtx.stroke();
+        }
     }
 
     requestAnimationFrame(detectBeat);
