@@ -114,8 +114,8 @@ function playMetronomeClick() {
 startBtn.onclick = async () => {
     if (detecting) return;
 
-    audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    await loadDrumSample(); // Load the drum sample
+    audioContext = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+    await preloadDrumSamples(); // Preload drum samples
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
     source = audioContext.createMediaStreamSource(stream);
@@ -128,7 +128,7 @@ startBtn.onclick = async () => {
     source.connect(highPassFilter);
     highPassFilter.connect(analyser);
 
-    analyser.fftSize = 2048;
+    analyser.fftSize = 512;
     bufferLength = analyser.frequencyBinCount;
     dataArray = new Uint8Array(bufferLength);
 
@@ -231,6 +231,8 @@ let beatThreshold = 0.05; // Adjust this threshold as needed
 let lastRenderTime = performance.now();
 
 function detectBeat() {
+    const startTime = performance.now(); // Start timing
+
     const currentTime = performance.now();
     const elapsedTime = currentTime - lastRenderTime;
     lastRenderTime = currentTime;
@@ -306,27 +308,19 @@ function detectBeat() {
         }
     });
 
+    const endTime = performance.now(); // End timing
+    //console.log(`detectBeat execution time: ${endTime - startTime} ms`);
+
     requestAnimationFrame(detectBeat);
 }
 
 let drumBuffer;
 
-async function loadDrumSample() {
-    const drumSelector = document.getElementById('drumSelector');
-    const selectedDrum = drumSelector.value; // Get the selected drum sound
-
-    const response = await fetch(selectedDrum); // Fetch the selected drum sound file
-    const arrayBuffer = await response.arrayBuffer();
-    drumBuffer = await audioContext.decodeAudioData(arrayBuffer);
-}
-
-document.getElementById('drumSelector').addEventListener('change', async () => {
-    if (audioContext) {
-        await loadDrumSample(); // Reload the drum sample based on the new selection
-    }
-});
-
 function playDrumHit(volume) {
+    const drumSelector = document.getElementById('drumSelector');
+    const selectedDrum = drumSelector.value.replace('.wav', ''); // Get the selected drum key (e.g., 'snare' or 'tom')
+
+    const drumBuffer = drumBuffers[selectedDrum]; // Retrieve the preloaded buffer
     if (!drumBuffer) return; // Ensure the drum sample is loaded
 
     const drumSource = audioContext.createBufferSource();
@@ -339,6 +333,21 @@ function playDrumHit(volume) {
     gainNode.connect(audioContext.destination);
 
     drumSource.start();
+}
+
+let drumBuffers = {}; // Dictionary to store preloaded drum samples
+
+async function preloadDrumSamples() {
+    const drumFiles = {
+        snare: 'snare.wav',
+        tom: 'tom.wav',
+    };
+
+    for (const [key, file] of Object.entries(drumFiles)) {
+        const response = await fetch(file);
+        const arrayBuffer = await response.arrayBuffer();
+        drumBuffers[key] = await audioContext.decodeAudioData(arrayBuffer);
+    }
 }
 </script>
 
