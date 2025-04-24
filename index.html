@@ -19,6 +19,11 @@
 <input type="range" id="metronomeRate" min="40" max="240" value="120" step="1">
 <span id="metronomeRateValue">120</span> BPM<br />
 <button id="syncMetronomeBtn">Sync Metronome</button><br />
+<label for="drumSelector">Select Drum Sound: </label>
+<select id="drumSelector">
+    <option value="snare.wav" selected>Snare</option>
+    <option value="tom.wav">Tom</option>
+</select>
 
 <script>
 let audioContext;
@@ -34,7 +39,7 @@ const startBtn = document.getElementById('startBtn');
 
 const timeSeriesCanvas = document.getElementById('timeSeriesCanvas');
 const timeCtx = timeSeriesCanvas.getContext('2d');
-const timeSeriesData = new Array(timeSeriesCanvas.width).fill(0);
+let timeSeriesData = new Array(timeSeriesCanvas.width).fill(0); // Change from const to let
 
 let previousVolume = 0; // Track the previous volume
 
@@ -42,6 +47,10 @@ let metronomeInterval;
 let metronomeRunning = false;
 
 let metronomeTicks = []; // Array to store positions of metronome tick lines
+
+const canvasTimeSpan = 5; // Time span in seconds that the canvas represents
+
+const pixelsPerMs = timeSeriesCanvas.width / (canvasTimeSpan * 1000); // Pixels per millisecond
 
 // Metronome elements
 const metronomeBtn = document.getElementById('metronomeBtn');
@@ -83,23 +92,20 @@ metronomeBtn.onclick = () => {
 
 // Play a metronome click sound
 function playMetronomeClick() {
-    if (!audioContext) {
-        audioContext = new (window.AudioContext || window.webkitAudioContext)(); // Initialize if not already done
-    }
-
-    const oscillator = audioContext.createOscillator();
-    const gainNode = audioContext.createGain();
+    const metronomeAudioContext = new (window.AudioContext || window.webkitAudioContext)(); // Separate context
+    const oscillator = metronomeAudioContext.createOscillator();
+    const gainNode = metronomeAudioContext.createGain();
 
     oscillator.type = 'triangle'; // Use 'triangle' or 'sine' for a click-like sound
-    oscillator.frequency.setValueAtTime(2000, audioContext.currentTime); // Higher frequency for a sharper click
-    gainNode.gain.setValueAtTime(0.2, audioContext.currentTime); // Adjust volume
-    gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.05); // Fade out quickly
+    oscillator.frequency.setValueAtTime(2000, metronomeAudioContext.currentTime); // Higher frequency for a sharper click
+    gainNode.gain.setValueAtTime(0.2, metronomeAudioContext.currentTime); // Adjust volume
+    gainNode.gain.exponentialRampToValueAtTime(0.001, metronomeAudioContext.currentTime + 0.05); // Fade out quickly
 
     oscillator.connect(gainNode);
-    gainNode.connect(audioContext.destination);
+    gainNode.connect(metronomeAudioContext.destination);
 
     oscillator.start();
-    oscillator.stop(audioContext.currentTime + 0.05); // Short duration for a click-like sound
+    oscillator.stop(metronomeAudioContext.currentTime + 0.05); // Short duration for a click-like sound
 
     // Add a metronome tick to the array
     metronomeTicks.push(timeSeriesCanvas.width - 1); // Add tick at the rightmost edge
@@ -109,12 +115,19 @@ startBtn.onclick = async () => {
     if (detecting) return;
 
     audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    await loadDrumSample(); // Load the drum sample
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
     source = audioContext.createMediaStreamSource(stream);
     analyser = audioContext.createAnalyser();
 
-    source.connect(analyser);
+    const highPassFilter = audioContext.createBiquadFilter();
+    highPassFilter.type = 'highpass';
+    highPassFilter.frequency.setValueAtTime(1000, audioContext.currentTime); // Adjust frequency as needed
+
+    source.connect(highPassFilter);
+    highPassFilter.connect(analyser);
+
     analyser.fftSize = 2048;
     bufferLength = analyser.frequencyBinCount;
     dataArray = new Uint8Array(bufferLength);
@@ -142,7 +155,13 @@ syncMetronomeBtn.onclick = async () => {
         source = audioContext.createMediaStreamSource(stream);
         analyser = audioContext.createAnalyser();
 
-        source.connect(analyser);
+        const highPassFilter = audioContext.createBiquadFilter();
+        highPassFilter.type = 'highpass';
+        highPassFilter.frequency.setValueAtTime(1000, audioContext.currentTime); // Adjust frequency as needed
+
+        source.connect(highPassFilter);
+        highPassFilter.connect(analyser);
+
         analyser.fftSize = 2048;
         bufferLength = analyser.frequencyBinCount;
         dataArray = new Uint8Array(bufferLength);
@@ -209,8 +228,15 @@ syncMetronomeBtn.onclick = async () => {
 
 let beatThreshold = 0.05; // Adjust this threshold as needed
 
-// Modify detectBeat to record timestamps of sharp beats
+let lastRenderTime = performance.now();
+
 function detectBeat() {
+    const currentTime = performance.now();
+    const elapsedTime = currentTime - lastRenderTime;
+    lastRenderTime = currentTime;
+
+    const bufferTimespan = analyser.fftSize / audioContext.sampleRate; // Calculate buffer timespan
+
     const amplification = 5;
     const beatRampThreshold = 2;
 
@@ -231,17 +257,15 @@ function detectBeat() {
 
     // Record timestamp of sharp beats
     if (isSharpBeat) {
-        beatTimestamps.push(performance.now());
+        beatTimestamps.push(currentTime);
+
+        // Play the drum sound with volume proportional to the detected volume
+        playDrumHit(amplifiedVolume);
     }
 
-    // Update instantaneous volume canvas
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = isSharpBeat ? 'red' : 'blue'; // Highlight sharp beats with red
-    ctx.fillRect(0, 0, amplifiedVolume * canvas.width, canvas.height);
-
-    // Update time-series canvas
-    timeSeriesData.push(amplifiedVolume);
-    timeSeriesData.shift();
+    // Update time-series data with timestamps
+    timeSeriesData.push({ time: currentTime, volume: amplifiedVolume, isSharpBeat });
+    timeSeriesData = timeSeriesData.filter((point) => currentTime - point.time <= canvasTimeSpan * 1000);
 
     // Clear the canvas
     timeCtx.clearRect(0, 0, timeSeriesCanvas.width, timeSeriesCanvas.height);
@@ -249,7 +273,7 @@ function detectBeat() {
     // Draw green metronome tick lines
     timeCtx.strokeStyle = 'green';
     timeCtx.lineWidth = 1;
-    metronomeTicks = metronomeTicks.map((x) => x - 1).filter((x) => x >= 0); // Move ticks left
+    metronomeTicks = metronomeTicks.map((x) => x - pixelsPerMs * elapsedTime).filter((x) => x >= 0); // Move ticks left
     metronomeTicks.forEach((x) => {
         timeCtx.beginPath();
         timeCtx.moveTo(x, 0);
@@ -257,31 +281,64 @@ function detectBeat() {
         timeCtx.stroke();
     });
 
-    // Draw the time-series data
+    // Draw the time-series data and sharp beats (with buffer offset)
     timeCtx.beginPath();
-    timeCtx.moveTo(0, timeSeriesCanvas.height - timeSeriesData[0] * timeSeriesCanvas.height);
-    for (let i = 1; i < timeSeriesData.length; i++) {
-        timeCtx.lineTo(i, timeSeriesCanvas.height - timeSeriesData[i] * timeSeriesCanvas.height);
-    }
+    timeSeriesData.forEach((point, index) => {
+        const x = timeSeriesCanvas.width - ((currentTime - point.time) + bufferTimespan) * pixelsPerMs; // Corrected offset
+        const y = timeSeriesCanvas.height - point.volume * timeSeriesCanvas.height;
+        if (index === 0) {
+            timeCtx.moveTo(x, y);
+        } else {
+            timeCtx.lineTo(x, y);
+        }
+    });
     timeCtx.strokeStyle = 'blue';
     timeCtx.stroke();
 
-    // Draw vertical lines for sharp beats
-    previousVolume = 0;
-    for (let i = 1; i < timeSeriesData.length; i++) {
-        let vol = timeSeriesData[i];
-        const isSharpBeat = vol > beatThreshold && vol > previousVolume * beatRampThreshold;
-        previousVolume = vol;
-        if (isSharpBeat) {
+    timeSeriesData.forEach((point) => {
+        const x = timeSeriesCanvas.width - ((currentTime - point.time) + bufferTimespan) * pixelsPerMs; // Corrected offset
+        if (point.isSharpBeat) {
             timeCtx.beginPath();
-            timeCtx.moveTo(i, timeSeriesCanvas.height);
-            timeCtx.lineTo(i, timeSeriesCanvas.height - vol * timeSeriesCanvas.height);
+            timeCtx.moveTo(x, timeSeriesCanvas.height);
+            timeCtx.lineTo(x, timeSeriesCanvas.height - point.volume * timeSeriesCanvas.height);
             timeCtx.strokeStyle = 'red';
             timeCtx.stroke();
         }
-    }
+    });
 
     requestAnimationFrame(detectBeat);
+}
+
+let drumBuffer;
+
+async function loadDrumSample() {
+    const drumSelector = document.getElementById('drumSelector');
+    const selectedDrum = drumSelector.value; // Get the selected drum sound
+
+    const response = await fetch(selectedDrum); // Fetch the selected drum sound file
+    const arrayBuffer = await response.arrayBuffer();
+    drumBuffer = await audioContext.decodeAudioData(arrayBuffer);
+}
+
+document.getElementById('drumSelector').addEventListener('change', async () => {
+    if (audioContext) {
+        await loadDrumSample(); // Reload the drum sample based on the new selection
+    }
+});
+
+function playDrumHit(volume) {
+    if (!drumBuffer) return; // Ensure the drum sample is loaded
+
+    const drumSource = audioContext.createBufferSource();
+    drumSource.buffer = drumBuffer;
+
+    const gainNode = audioContext.createGain();
+    gainNode.gain.value = volume; // Set the volume proportionally
+
+    drumSource.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+
+    drumSource.start();
 }
 </script>
 
