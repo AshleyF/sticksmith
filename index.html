@@ -10,10 +10,14 @@
 </head>
 <body>
 
-<h1>Drum Beat Detector</h1>
-<button id="startBtn">Start Detection</button><br />
+<h1>Drum Beat Detector v0.1</h1>
+<button id="startBtn">Start Detection</button>
+<button id="midiBtn">Enable MIDI</button>
+<button id="disableMidiBtn">Disable MIDI</button><br />
 <canvas id="volumeCanvas" width="500" height="5"></canvas><br />
 <canvas id="timeSeriesCanvas" width="800" height="100"></canvas><br />
+<label for="dynamicScaleSwitch">Dynamic Scaling: </label>
+<input type="checkbox" id="dynamicScaleSwitch" checked><br />
 <button id="metronomeBtn">Start Metronome</button><br />
 <label for="metronomeRate">Metronome Rate (BPM): </label>
 <input type="range" id="metronomeRate" min="40" max="240" value="120" step="1">
@@ -21,7 +25,8 @@
 <button id="syncMetronomeBtn">Sync Metronome</button><br />
 <label for="drumSelector">Select Drum Sound: </label>
 <select id="drumSelector">
-    <option value="snare.wav" selected>Snare</option>
+    <option value="none" selected>None</option>
+    <option value="snare.wav">Snare</option>
     <option value="tom.wav">Tom</option>
 </select>
 
@@ -51,6 +56,8 @@ let metronomeTicks = []; // Array to store positions of metronome tick lines
 const canvasTimeSpan = 5; // Time span in seconds that the canvas represents
 
 const pixelsPerMs = timeSeriesCanvas.width / (canvasTimeSpan * 1000); // Pixels per millisecond
+
+const closeStrikeThreshold = 100; // Time in milliseconds for close succession
 
 // Metronome elements
 const metronomeBtn = document.getElementById('metronomeBtn');
@@ -231,85 +238,48 @@ let beatThreshold = 0.05; // Adjust this threshold as needed
 let lastRenderTime = performance.now();
 
 function detectBeat() {
-    const startTime = performance.now(); // Start timing
-
     const currentTime = performance.now();
     const elapsedTime = currentTime - lastRenderTime;
     lastRenderTime = currentTime;
 
-    const bufferTimespan = analyser.fftSize / audioContext.sampleRate; // Calculate buffer timespan
-
-    const amplification = 5;
-    const beatRampThreshold = 2;
-
-    analyser.getByteTimeDomainData(dataArray);
-
-    let sum = 0;
-    for (let i = 0; i < bufferLength; i++) {
-        const val = (dataArray[i] - 128) / 128;
-        sum += val * val;
-    }
-
-    const volume = Math.sqrt(sum / bufferLength);
-    const amplifiedVolume = volume * amplification; // Amplify the volume
-
-    // Detect rising edge of a sharp beat
-    const isSharpBeat = amplifiedVolume > previousVolume * beatRampThreshold; // Adjust sensitivity as needed
-    previousVolume = amplifiedVolume;
-
-    // Record timestamp of sharp beats
-    if (isSharpBeat) {
-        beatTimestamps.push(currentTime);
-
-        // Play the drum sound with volume proportional to the detected volume
-        playDrumHit(amplifiedVolume);
-    }
-
-    // Update time-series data with timestamps
-    timeSeriesData.push({ time: currentTime, volume: amplifiedVolume, isSharpBeat });
-    timeSeriesData = timeSeriesData.filter((point) => currentTime - point.time <= canvasTimeSpan * 1000);
+    const bufferTimespan = analyser.fftSize / audioContext.sampleRate;
 
     // Clear the canvas
     timeCtx.clearRect(0, 0, timeSeriesCanvas.width, timeSeriesCanvas.height);
 
-    // Draw green metronome tick lines
-    timeCtx.strokeStyle = 'green';
-    timeCtx.lineWidth = 1;
-    metronomeTicks = metronomeTicks.map((x) => x - pixelsPerMs * elapsedTime).filter((x) => x >= 0); // Move ticks left
-    metronomeTicks.forEach((x) => {
+    // Get the state of the dynamic scaling switch
+    const dynamicScaleEnabled = document.getElementById('dynamicScaleSwitch').checked;
+
+    // Define the exponent for the power curve
+    const exponent = dynamicScaleEnabled ? 2 : 1; // Use 2 for non-linear scaling, 1 for linear scaling
+
+    // Draw MIDI velocities as red or blue lines
+    midiVelocities = midiVelocities.filter((point) => currentTime - point.time <= canvasTimeSpan * 1000); // Remove old velocities
+    midiVelocities.forEach((point, index) => {
+        const x = timeSeriesCanvas.width - (currentTime - point.time) * pixelsPerMs;
+
+        // Apply power curve scaling
+        let height = Math.pow(point.velocity / 127, exponent) * timeSeriesCanvas.height;
+
+        // Determine the color based on conditions
+        let color = 'red';
+        if (index > 0) {
+            const previousPoint = midiVelocities[index - 1];
+            const previousX = timeSeriesCanvas.width - (currentTime - previousPoint.time) * pixelsPerMs;
+
+            const timeDifference = point.time - previousPoint.time;
+            if (timeDifference < closeStrikeThreshold) {
+                // If the strikes are close in time, render in blue
+                color = 'blue';
+            }
+        }
+
         timeCtx.beginPath();
-        timeCtx.moveTo(x, 0);
-        timeCtx.lineTo(x, timeSeriesCanvas.height);
+        timeCtx.moveTo(x, timeSeriesCanvas.height);
+        timeCtx.lineTo(x, timeSeriesCanvas.height - height);
+        timeCtx.strokeStyle = color;
         timeCtx.stroke();
     });
-
-    // Draw the time-series data and sharp beats (with buffer offset)
-    timeCtx.beginPath();
-    timeSeriesData.forEach((point, index) => {
-        const x = timeSeriesCanvas.width - ((currentTime - point.time) + bufferTimespan) * pixelsPerMs; // Corrected offset
-        const y = timeSeriesCanvas.height - point.volume * timeSeriesCanvas.height;
-        if (index === 0) {
-            timeCtx.moveTo(x, y);
-        } else {
-            timeCtx.lineTo(x, y);
-        }
-    });
-    timeCtx.strokeStyle = 'blue';
-    timeCtx.stroke();
-
-    timeSeriesData.forEach((point) => {
-        const x = timeSeriesCanvas.width - ((currentTime - point.time) + bufferTimespan) * pixelsPerMs; // Corrected offset
-        if (point.isSharpBeat) {
-            timeCtx.beginPath();
-            timeCtx.moveTo(x, timeSeriesCanvas.height);
-            timeCtx.lineTo(x, timeSeriesCanvas.height - point.volume * timeSeriesCanvas.height);
-            timeCtx.strokeStyle = 'red';
-            timeCtx.stroke();
-        }
-    });
-
-    const endTime = performance.now(); // End timing
-    //console.log(`detectBeat execution time: ${endTime - startTime} ms`);
 
     requestAnimationFrame(detectBeat);
 }
@@ -321,6 +291,22 @@ function playDrumHit(volume) {
     const selectedDrum = drumSelector.value.replace('.wav', ''); // Get the selected drum key (e.g., 'snare' or 'tom')
 
     const drumBuffer = drumBuffers[selectedDrum]; // Retrieve the preloaded buffer
+    if (!drumBuffer) return; // Ensure the drum sample is loaded
+
+    const drumSource = audioContext.createBufferSource();
+    drumSource.buffer = drumBuffer;
+
+    const gainNode = audioContext.createGain();
+    gainNode.gain.value = volume; // Set the volume proportionally
+
+    drumSource.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+
+    drumSource.start();
+}
+
+function playDrumHitWithKey(drumKey, volume) {
+    const drumBuffer = drumBuffers[drumKey]; // Retrieve the preloaded buffer
     if (!drumBuffer) return; // Ensure the drum sample is loaded
 
     const drumSource = audioContext.createBufferSource();
@@ -349,6 +335,100 @@ async function preloadDrumSamples() {
         drumBuffers[key] = await audioContext.decodeAudioData(arrayBuffer);
     }
 }
+
+let midiInputs = []; // Store references to MIDI inputs
+
+async function initializeMIDI() {
+    if (!navigator.requestMIDIAccess) {
+        console.error('Web MIDI API is not supported in this browser.');
+        return;
+    }
+
+    try {
+        const midiAccess = await navigator.requestMIDIAccess();
+        midiInputs = Array.from(midiAccess.inputs.values()); // Store all MIDI inputs
+        midiInputs.forEach((input) => {
+            input.onmidimessage = handleMIDIMessage; // Listen for MIDI messages
+        });
+        console.log('MIDI initialized. Listening for input...');
+    } catch (error) {
+        console.error('Failed to access MIDI devices:', error);
+    }
+}
+
+function disableMIDI() {
+    midiInputs.forEach((input) => {
+        input.onmidimessage = null; // Stop listening for MIDI messages
+    });
+    console.log('MIDI disabled. Inputs released.');
+}
+
+function handleMIDIMessage(message) {
+    const [status, note, velocity] = message.data;
+
+    console.log(`MIDI Message: Status: ${status}, Note: ${note}, Velocity: ${velocity}`);
+    // Check if the message is a "note on" event (status 0x90) and the note is 60
+    if (status === 153 && note === 60 && velocity > 0) {
+        // Get the selected drum sound from the dropdown menu
+        const drumSelector = document.getElementById('drumSelector');
+        const selectedDrum = drumSelector.value.replace('.wav', ''); // Remove ".wav" for consistency
+
+        // Add the velocity and timestamp to the array for rendering
+        midiVelocities.push({ time: performance.now(), velocity });
+        console.log(midiVelocities); // Debug: Log the updated array
+
+        // Skip playing a sound if "None" is selected
+        if (selectedDrum === 'none') {
+            console.log('No sound selected.');
+            return;
+        }
+
+        const volume = velocity / 127; // Normalize velocity to a 0-1 range
+        playDrumHitWithKey(selectedDrum, volume); // Play the selected drum sound
+    }
+}
+
+let midiVelocities = []; // Array to store MIDI velocities and timestamps
+
+const midiBtn = document.getElementById('midiBtn');
+
+midiBtn.onclick = async () => {
+    if (!audioContext) {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    }
+
+    await preloadDrumSamples(); // Preload drum samples
+    await initializeMIDI(); // Initialize MIDI connection
+
+    // Initialize the analyser if it hasn't been set up
+    if (!analyser) {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+        source = audioContext.createMediaStreamSource(stream);
+        analyser = audioContext.createAnalyser();
+
+        const highPassFilter = audioContext.createBiquadFilter();
+        highPassFilter.type = 'highpass';
+        highPassFilter.frequency.setValueAtTime(1000, audioContext.currentTime); // Adjust frequency as needed
+
+        source.connect(highPassFilter);
+        highPassFilter.connect(analyser);
+
+        analyser.fftSize = 512;
+        bufferLength = analyser.frequencyBinCount;
+        dataArray = new Uint8Array(bufferLength);
+    }
+
+    if (!detecting) {
+        detecting = true;
+        detectBeat(); // Start the rendering loop
+    }
+};
+
+const disableMidiBtn = document.getElementById('disableMidiBtn');
+disableMidiBtn.onclick = () => {
+    disableMIDI();
+};
 </script>
 
 </body>
