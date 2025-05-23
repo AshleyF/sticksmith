@@ -10,27 +10,81 @@
     </head>
     <body>
         <h1>MIDI Beats</h1>
-        <button id="midiBtn">Enable MIDI</button>
         <canvas id="timeSeriesCanvas" width="800" height="100"></canvas><br />
+        <div>
+            <button id="midiBtn">Enable MIDI</button>
+            <span id="debug"></span>
+        </div>
         <script>
 const timeSeriesCanvas = document.getElementById('timeSeriesCanvas');
 const timeCtx = timeSeriesCanvas.getContext('2d');
 const canvasTimeSpan = 5; // Time span in seconds that the canvas represents
 const pixelsPerMs = timeSeriesCanvas.width / (canvasTimeSpan * 1000); // Pixels per millisecond
-const flamThreshold = 100; // Time in milliseconds for close succession
+const bpm = 60;
+const flamThreshold = 100; // TODO: relative to BPM? Time in milliseconds for close succession
+const resetAfterSilenceTimeSpan = 3; // Time span in seconds after which we reset
 
 let notes = []; // Array to store MIDI velocities and timestamps
 
-function beat() {
+let lastNoteTime = performance.now();
+function record(instrument, velocity, time) {
+    // TODO: instruments
+    const elapsed = time - lastNoteTime;
+    notes.push({ velocity, elapsed });
+    lastNoteTime = time;
+}
+
+function transcribe(notes) {
+    function quantize(time) {
+        const whole = 1000 * 60 / bpm;
+        if (time > whole * 0.75) {
+            return "whole";
+        } else if (time > (whole / 2) * 0.75) {
+            return "half";
+        } else if (time > (whole / 4) * 0.75) {
+            return "quarter";
+        } else if (time > (whole / 8) * 0.75) {
+            return "eighth";
+        } else if (time > (whole / 16) * 0.75) {
+            return "sixteenth";
+        } else {
+            return "thirty-second";
+        }
+    }
+    if (notes.length < 2) {
+        return "?";
+    }
+    return quantize(notes[notes.length - 1].elapsed);
+    // TODO: assume single note is whole (or remainder of measure)
+    //for (let i = 0; i < notes.length - 1; i++) {
+    //    const n = notes[i];
+    //    const next = notes[i + 1];
+    //    const time = next.elapsed;
+
+    //    // if (next.elapsed - n.elapsed < flamThreshold) {
+    //    //     // If the next note is within the flam threshold, adjust the velocity
+    //    //     n.velocity = Math.max(n.velocity, next.velocity);
+    //    //     notes.splice(i + 1, 1); // Remove the next note
+    //    //     i--; // Adjust index after removal
+    //    // }
+    //}
+}
+
+function display() {
     timeCtx.clearRect(0, 0, timeSeriesCanvas.width, timeSeriesCanvas.height);
     const now = performance.now();
     let accumulatedTime = now - lastNoteTime;
+    if (accumulatedTime > resetAfterSilenceTimeSpan * 1000) {
+        notes = []; // start over once too old
+    }
+    document.getElementById('debug').innerText = `Notes: ${notes.length} (${transcribe(notes)})`;
     for (let i = notes.length - 1; i >= 0; i--) {
         const n = notes[i];
         const x = timeSeriesCanvas.width - accumulatedTime * pixelsPerMs; // Calculate x-coordinate
         accumulatedTime += n.elapsed; // Accumulate elapsed time
         if (x < 0) break; // off left
-        let height = Math.pow(n.velocity / 127, 2) * timeSeriesCanvas.height; // Apply power curve scaling
+        //let height = Math.pow(n.velocity / 127, 2) * timeSeriesCanvas.height; // Apply power curve scaling
+        let height = n.velocity / 127 * timeSeriesCanvas.height;
         let color = n.elapsed < flamThreshold ? 'blue' : 'red';
         timeCtx.beginPath();
         timeCtx.moveTo(x, timeSeriesCanvas.height);
@@ -38,7 +92,7 @@ function beat() {
         timeCtx.strokeStyle = color;
         timeCtx.stroke();
     }
-    requestAnimationFrame(beat); // Continue the animation loop
+    requestAnimationFrame(display); // Continue the animation loop
 }
 
 let midiInputs = []; // Store references to MIDI inputs
@@ -66,17 +120,12 @@ function disableMIDI() {
     console.log('MIDI disabled. Inputs released.');
 }
 
-let lastNoteTime = performance.now();
 function handleMIDIMessage(message) {
     const [status, note, velocity] = message.data;
     // console.log(`MIDI Message: Status: ${status}, Note: ${note}, Velocity: ${velocity}`);
     if (status === 153 && note === 60 && velocity > 0) { // "note on" event (status 0x90) and the note is 60
-        const now = performance.now();
-        const elapsed = now - lastNoteTime;
-        lastNoteTime = now;
-        notes.push({ velocity, elapsed });
-        //let note = { velocity, elapsed };
-        //console.log(`MIDI Message: Status: ${JSON.stringify(note)}`);
+        // TODO: instruments
+        record('snare', velocity, performance.now());
     }
 }
 
@@ -86,11 +135,40 @@ document.getElementById('midiBtn').onclick = async () => {
         disableMIDI();
     } else {
         await initializeMIDI();
-        beat();
     }
     document.getElementById('midiBtn').innerText = midiEnabled ? 'Disable MIDI' : 'Enable MIDI';
     midiEnabled = !midiEnabled;
 };
+
+document.addEventListener('keydown', (event) => {
+    switch (event.code) {
+        case 'KeyD':
+            record('snare', 80, performance.now());
+            break;
+        case 'KeyS':
+            record('snare', 40, performance.now());
+            break;
+        case 'KeyF':
+            record('snare', 120, performance.now());
+            break;
+        case 'KeyK':
+            record('snare', 80, performance.now());
+            break;
+        case 'KeyJ':
+            record('snare', 120, performance.now());
+            break;
+        case 'KeyL':
+            record('snare', 40, performance.now());
+            break;
+        case 'Space':
+            record('kick', 80, performance.now());
+            break;
+        default: return;
+    }
+    event.preventDefault();
+});
+
+display();
         </script>
     </body>
 </html>
