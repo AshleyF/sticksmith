@@ -17,37 +17,28 @@ const timeSeriesCanvas = document.getElementById('timeSeriesCanvas');
 const timeCtx = timeSeriesCanvas.getContext('2d');
 const canvasTimeSpan = 5; // Time span in seconds that the canvas represents
 const pixelsPerMs = timeSeriesCanvas.width / (canvasTimeSpan * 1000); // Pixels per millisecond
-const closeStrikeThreshold = 100; // Time in milliseconds for close succession
+const flamThreshold = 100; // Time in milliseconds for close succession
 
 let notes = []; // Array to store MIDI velocities and timestamps
 
 function beat() {
-    const currentTime = performance.now();
     timeCtx.clearRect(0, 0, timeSeriesCanvas.width, timeSeriesCanvas.height);
-
-    // Draw MIDI velocities as red or blue lines
-    notes = notes.filter((point) => currentTime - point.time <= canvasTimeSpan * 1000); // Remove old velocities
-    notes.forEach((point, index) => {
-        const x = timeSeriesCanvas.width - (currentTime - point.time) * pixelsPerMs;
-        let height = Math.pow(point.velocity / 127, 2) * timeSeriesCanvas.height; // Apply power curve scaling
-        let color = 'red';
-        if (index > 0) {
-            const previousPoint = notes[index - 1];
-            const previousX = timeSeriesCanvas.width - (currentTime - previousPoint.time) * pixelsPerMs;
-            const timeDifference = point.time - previousPoint.time;
-            if (timeDifference < closeStrikeThreshold) {
-                color = 'blue'; // If the strikes are close in time, render in blue
-            }
-        }
-
+    const now = performance.now();
+    let accumulatedTime = now - lastNoteTime;
+    for (let i = notes.length - 1; i >= 0; i--) {
+        const n = notes[i];
+        const x = timeSeriesCanvas.width - accumulatedTime * pixelsPerMs; // Calculate x-coordinate
+        accumulatedTime += n.elapsed; // Accumulate elapsed time
+        if (x < 0) break; // off left
+        let height = Math.pow(n.velocity / 127, 2) * timeSeriesCanvas.height; // Apply power curve scaling
+        let color = n.elapsed < flamThreshold ? 'blue' : 'red';
         timeCtx.beginPath();
         timeCtx.moveTo(x, timeSeriesCanvas.height);
         timeCtx.lineTo(x, timeSeriesCanvas.height - height);
         timeCtx.strokeStyle = color;
         timeCtx.stroke();
-    });
-
-    requestAnimationFrame(beat);
+    }
+    requestAnimationFrame(beat); // Continue the animation loop
 }
 
 let midiInputs = []; // Store references to MIDI inputs
@@ -75,11 +66,17 @@ function disableMIDI() {
     console.log('MIDI disabled. Inputs released.');
 }
 
+let lastNoteTime = performance.now();
 function handleMIDIMessage(message) {
     const [status, note, velocity] = message.data;
-    console.log(`MIDI Message: Status: ${status}, Note: ${note}, Velocity: ${velocity}`);
+    // console.log(`MIDI Message: Status: ${status}, Note: ${note}, Velocity: ${velocity}`);
     if (status === 153 && note === 60 && velocity > 0) { // "note on" event (status 0x90) and the note is 60
-        notes.push({ time: performance.now(), velocity }); // Add the velocity and timestamp to the array for rendering
+        const now = performance.now();
+        const elapsed = now - lastNoteTime;
+        lastNoteTime = now;
+        notes.push({ velocity, elapsed });
+        //let note = { velocity, elapsed };
+        //console.log(`MIDI Message: Status: ${JSON.stringify(note)}`);
     }
 }
 
