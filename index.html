@@ -11,36 +11,28 @@
     <body>
         <h1>MIDI Beats</h1>
         <button id="midiBtn">Enable MIDI</button>
-        <button id="disableMidiBtn">Disable MIDI</button><br />
         <canvas id="timeSeriesCanvas" width="800" height="100"></canvas><br />
         <script>
-let audioContext;
-let dataArray;
-let bufferLength;
-let source;
-
 const timeSeriesCanvas = document.getElementById('timeSeriesCanvas');
 const timeCtx = timeSeriesCanvas.getContext('2d');
-let timeSeriesData = new Array(timeSeriesCanvas.width).fill(0); // Change from const to let
-
 const canvasTimeSpan = 5; // Time span in seconds that the canvas represents
-
 const pixelsPerMs = timeSeriesCanvas.width / (canvasTimeSpan * 1000); // Pixels per millisecond
-
 const closeStrikeThreshold = 100; // Time in milliseconds for close succession
 
-function detectBeat() {
+let notes = []; // Array to store MIDI velocities and timestamps
+
+function beat() {
     const currentTime = performance.now();
     timeCtx.clearRect(0, 0, timeSeriesCanvas.width, timeSeriesCanvas.height);
 
     // Draw MIDI velocities as red or blue lines
-    midiVelocities = midiVelocities.filter((point) => currentTime - point.time <= canvasTimeSpan * 1000); // Remove old velocities
-    midiVelocities.forEach((point, index) => {
+    notes = notes.filter((point) => currentTime - point.time <= canvasTimeSpan * 1000); // Remove old velocities
+    notes.forEach((point, index) => {
         const x = timeSeriesCanvas.width - (currentTime - point.time) * pixelsPerMs;
         let height = Math.pow(point.velocity / 127, 2) * timeSeriesCanvas.height; // Apply power curve scaling
         let color = 'red';
         if (index > 0) {
-            const previousPoint = midiVelocities[index - 1];
+            const previousPoint = notes[index - 1];
             const previousX = timeSeriesCanvas.width - (currentTime - previousPoint.time) * pixelsPerMs;
             const timeDifference = point.time - previousPoint.time;
             if (timeDifference < closeStrikeThreshold) {
@@ -55,18 +47,16 @@ function detectBeat() {
         timeCtx.stroke();
     });
 
-    requestAnimationFrame(detectBeat);
+    requestAnimationFrame(beat);
 }
 
 let midiInputs = []; // Store references to MIDI inputs
 
 async function initializeMIDI() {
-    if (!navigator.requestMIDIAccess) {
-        alert('Web MIDI API is not supported in this browser.');
-        return;
-    }
-
     try {
+        if (!navigator.requestMIDIAccess) {
+            throw 'Web MIDI API is not supported in this browser.';
+        }
         const midiAccess = await navigator.requestMIDIAccess();
         midiInputs = Array.from(midiAccess.inputs.values()); // Store all MIDI inputs
         midiInputs.forEach((input) => {
@@ -87,28 +77,22 @@ function disableMIDI() {
 
 function handleMIDIMessage(message) {
     const [status, note, velocity] = message.data;
-
     console.log(`MIDI Message: Status: ${status}, Note: ${note}, Velocity: ${velocity}`);
-    // Check if the message is a "note on" event (status 0x90) and the note is 60
-    if (status === 153 && note === 60 && velocity > 0) {
-        // Get the selected drum sound from the dropdown menu
-        const drumSelector = document.getElementById('drumSelector');
-
-        // Add the velocity and timestamp to the array for rendering
-        midiVelocities.push({ time: performance.now(), velocity });
-        console.log(midiVelocities); // Debug: Log the updated array
+    if (status === 153 && note === 60 && velocity > 0) { // "note on" event (status 0x90) and the note is 60
+        notes.push({ time: performance.now(), velocity }); // Add the velocity and timestamp to the array for rendering
     }
 }
 
-let midiVelocities = []; // Array to store MIDI velocities and timestamps
-
+let midiEnabled = false;
 document.getElementById('midiBtn').onclick = async () => {
-    await initializeMIDI(); // Initialize MIDI connection
-    detectBeat(); // Start the rendering loop
-};
-
-document.getElementById('disableMidiBtn').onclick = () => {
-    disableMIDI();
+    if (midiEnabled) {
+        disableMIDI();
+    } else {
+        await initializeMIDI();
+        beat();
+    }
+    document.getElementById('midiBtn').innerText = midiEnabled ? 'Disable MIDI' : 'Enable MIDI';
+    midiEnabled = !midiEnabled;
 };
         </script>
     </body>
