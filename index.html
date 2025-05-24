@@ -10,7 +10,7 @@
     </head>
     <body>
         <h1>MIDI Beats</h1>
-        <canvas id="timeSeriesCanvas" width="1000" height="100"></canvas><br />
+        <canvas id="timeSeriesCanvas" width="1025" height="100"></canvas><br />
         <div>
             <button id="midiBtn">Enable MIDI</button>
             <span id="debug"></span>
@@ -22,7 +22,7 @@
             <span id="bpmDisplay">100</span>
         </div>
         <div>
-            <canvas id="staffCanvas" width="1000" height="200"></canvas>
+            <canvas id="staffCanvas" width="1025" height="200"></canvas>
         </div>
         <script>
 const timeSeriesCanvas = document.getElementById('timeSeriesCanvas');
@@ -34,18 +34,27 @@ const beatsPerMeasure = 4; // Number of beats in a measure
 const resetAfterSilenceBeats = 6; // Time span in seconds after which we reset
 
 let notes = []; // Array to store MIDI velocities and timestamps
+let firstNoteTime = performance.now();
 
 let lastNoteTime = performance.now();
 function record(instrument, velocity, time) {
     // TODO: instruments
+    let bpm = parseInt(bpmSlider.value, 10);
+    let resetAfterTime = 60000 / bpm * resetAfterSilenceBeats;
+    if (performance.now() - lastNoteTime > resetAfterTime) {
+        notes = []; // start over once too old
+    }
     const elapsed = time - lastNoteTime;
+    if (notes.length == 0) {
+        firstNoteTime = time;
+    }
     notes.push({ velocity, elapsed });
     lastNoteTime = time;
 }
 
+const dpr = window.devicePixelRatio || 1; // Get the device pixel ratio (default to 1)
 function setupHighDpiCanvas(canvas) {
     const ctx = canvas.getContext('2d');
-    const dpr = window.devicePixelRatio || 1; // Get the device pixel ratio (default to 1)
 
     // Save the original CSS size
     const cssWidth = canvas.width;
@@ -69,37 +78,55 @@ function setupHighDpiCanvas(canvas) {
 const staffCanvas = document.getElementById('staffCanvas');
 const staffCtx = setupHighDpiCanvas(staffCanvas);
 
-// Function to draw the staff
+const scale = 0.5;
+const columnWidth = 30 * scale / dpr;
+const lineHeight = 20 * scale / dpr;
+
 function drawStaff() {
-    const dpr = window.devicePixelRatio || 1; // Get the device pixel ratio (default to 1)
     const staffY = staffCanvas.height / dpr / 2; // Center the staff line vertically
+    const staffTopY = staffY - (lineHeight * 2);
+    const staffBottomY = staffY + (lineHeight * 2);
     staffCtx.strokeStyle = 'black';
     staffCtx.lineWidth = 1;
-
-    // Draw the single staff line
     staffCtx.clearRect(0, 0, staffCanvas.width, staffCanvas.height);
+    for (let y = staffTopY; y <= staffBottomY; y += lineHeight) {
+        staffCtx.beginPath();
+        staffCtx.moveTo(0, y);
+        staffCtx.lineTo(staffCanvas.width / dpr, y);
+        staffCtx.stroke();
+    }
+    for (let x = 0; x < staffCanvas.width / dpr; x += columnWidth * 32) {
+        staffCtx.beginPath();
+        staffCtx.moveTo(x, staffTopY);
+        staffCtx.lineTo(x, staffBottomY);
+        staffCtx.stroke();
+    }
+}
+
+function drawCursor(x) {
+    staffCtx.strokeStyle = 'red';
+    staffCtx.lineWidth = 1;
     staffCtx.beginPath();
-    staffCtx.moveTo(0, staffY);
-    staffCtx.lineTo(staffCanvas.width / dpr, staffY);
+    staffCtx.moveTo(x, 0);
+    staffCtx.lineTo(x, staffCanvas.height / dpr);
     staffCtx.stroke();
 }
 
-const scale = 0.5;
-
-function drawNote(column, division) {
-    const dpr = window.devicePixelRatio || 1; // Get the device pixel ratio (default to 1)
+function drawNote(column, division, special) {
     const hollowWidth = 2 * scale / dpr;
     const hollowHeight = 4 * scale / dpr;
-    const staffY = staffCanvas.height / dpr / 2; // Center the note on the staff line
-    const noteX = (column + 1) * 30 * scale / dpr;
+    const y = staffCanvas.height / dpr / 2 - (lineHeight / 2); // Center the note on the staff line
+    const noteX = (column + 1) * columnWidth;
     const stemX = noteX + (13 * scale / dpr);
-    const stemBottomY = staffY - (5 * scale / dpr);
-    const stemTopY = staffY - (60 * scale / dpr);
+    const stemBottomY = y - (5 * scale / dpr);
+    const stemTopY = y - (75 * scale / dpr);
     staffCtx.fillStyle = 'black';
     staffCtx.strokeStyle = 'black';
     staffCtx.lineWidth = 1;
+
+    // Draw the note head
     staffCtx.beginPath();
-    staffCtx.ellipse(noteX, staffY, 10 * scale / dpr, 15 * scale / dpr, Math.PI / 3, 0, 2 * Math.PI); // Tilted clockwise
+    staffCtx.ellipse(noteX, y, 10 * scale / dpr, 15 * scale / dpr, Math.PI / 3, 0, 2 * Math.PI); // Tilted clockwise
     if (division == 0) {
         staffCtx.fillStyle = 'red';
         staffCtx.fill();
@@ -108,6 +135,8 @@ function drawNote(column, division) {
     } else {
         staffCtx.fill();
     }
+
+    // Draw the stem and flags for notes with division >= 2
     if (division >= 2) {
         staffCtx.beginPath();
         staffCtx.moveTo(stemX, stemBottomY);
@@ -117,7 +146,7 @@ function drawNote(column, division) {
         const flagHeight = 10 * scale / dpr;
         const flagGap = 5 * scale / dpr;
         division /= 4; // starting with quarter notes
-        i = 0; 
+        let i = 0;
         while (division > 1) {
             staffCtx.beginPath();
             const flagY = stemTopY + (i * ((flagHeight + flagGap) * 4) * scale / dpr);
@@ -130,41 +159,93 @@ function drawNote(column, division) {
             division /= 2;
         }
     }
+
+    if (division == 0) {
+        staffCtx.strokeStyle = 'red';
+    }
+    if (special === 'accent') {
+        const accentY = stemTopY - (30 * scale / dpr); // Position above the note
+        const accentWidth = 20 * scale / dpr; // Width of the "greater than" sign
+        const accentHeight = 20 * scale / dpr; // Height of the "greater than" sign
+
+        staffCtx.beginPath();
+        staffCtx.moveTo(stemX - accentWidth, accentY);
+        staffCtx.lineTo(stemX, accentY + accentHeight / 2);
+        staffCtx.lineTo(stemX - accentWidth, accentY + accentHeight);
+        staffCtx.stroke();
+    }
+    if (special === 'ghost') {
+        const parenthesisOffset = 16 * scale / dpr; // Distance from the note head
+        const parenthesisHeight = 40 * scale / dpr; // Height of the parentheses
+        const parenthesisWidth = 16 * scale / dpr; // Width of the parentheses
+        staffCtx.beginPath();
+        staffCtx.ellipse(noteX - parenthesisOffset, y, parenthesisWidth / 2, parenthesisHeight / 2, 0, -Math.PI / 2, Math.PI / 2, true);
+        staffCtx.stroke();
+        staffCtx.beginPath();
+        staffCtx.ellipse(noteX + parenthesisOffset, y, parenthesisWidth / 2, parenthesisHeight / 2, 0, Math.PI / 2, -Math.PI / 2, true);
+        staffCtx.stroke();
+    }
+    if (special === 'flam') {
+        const flamNoteX = noteX - (25 * scale / dpr); // Position the flam note slightly to the left
+        const flamStemX = flamNoteX + (5 * scale / dpr);
+        const flamStemTopY = y - (50 * scale / dpr); // Shorter stem for the flam note
+        staffCtx.beginPath();
+        staffCtx.ellipse(flamNoteX, y, 5 * scale / dpr, 7.5 * scale / dpr, Math.PI / 3, 0, 2 * Math.PI); // Smaller tilted note head
+        staffCtx.fill();
+        staffCtx.beginPath();
+        staffCtx.moveTo(flamStemX, y);
+        staffCtx.lineTo(flamStemX, flamStemTopY);
+        staffCtx.stroke();
+        staffCtx.beginPath();
+        staffCtx.arc((flamNoteX + noteX) / 2, y + (14 * scale / dpr), 10 * scale / dpr, 0, Math.PI, false);
+        staffCtx.stroke();
+    }
 }
 
-function transcribe(notes) {
+function transcribe() {
+    function noteValue(time) {
+        if (time > whole * 0.75) return 1;
+        if (time > (whole / 2) * 0.75) return 2;
+        if (time > (whole / 4) * 0.75) return 4;
+        if (time > (whole / 8) * 0.75) return 8;
+        if (time > (whole / 16) * 0.75) return 16;
+        return 32;
+    }
+    drawStaff();
     if (notes.length == 0) {
         return;
     }
     let bpm = parseInt(bpmSlider.value, 10);
     const whole = 1000 * 60 / bpm * 4;
-    drawStaff();
     let column = 0;
-    for (let i = 0; i < notes.length - 1; i++) {
+    for (let i = 0; i < notes.length; i++) {
         const n0 = notes[i];
         const n1 = notes[i + 1];
-        const time = n1.elapsed;
-        if (time > whole * 0.75) {
-            drawNote(column, 1);
-            column += 32;
-        } else if (time > (whole / 2) * 0.75) {
-            drawNote(column, 2);
-            column += 16;
-        } else if (time > (whole / 4) * 0.75) {
-            drawNote(column, 4);
-            column += 8;
-        } else if (time > (whole / 8) * 0.75) {
-            drawNote(column, 8);
-            column += 4;
-        } else if (time > (whole / 16) * 0.75) {
-            drawNote(column, 16);
-            column += 2;
+        let special = n0.velocity < 60 ? 'ghost' : (n0.velocity > 115 ? 'accent' : 'normal');
+        if (i < notes.length - 1) {
+            let time = n0.elapsed;
+            if (n1.velocity > n0.velocity && n1.elapsed < flamThreshold) { // flam?
+                special = 'flam';
+                time += n1.elapsed;
+                i++;
+            }
+            var n = noteValue(time);
+            drawNote(column, n, special);
+            column += 32 / n;
         } else {
-            drawNote(column, 32);
-            column += 1;
+            drawNote(column, 0, special); // Draw the last note as red cursor
         }
     }
-    drawNote(column, 0); // Draw the last note as red cursor
+    if (column > 32 * 4) {
+        notes = []; // start over
+    }
+    if (notes.length > 0) {
+        const now = performance.now();
+        const elapsed = now - firstNoteTime;
+        const pixelsPerMs = columnWidth / (whole / 32);
+        const x = elapsed * pixelsPerMs; // Calculate x-coordinate based on elapsed time
+        drawCursor(x); // Draw the cursor at the current time position
+    }
 }
 
 function display() {
@@ -173,10 +254,7 @@ function display() {
     let accumulatedTime = now - lastNoteTime;
     let bpm = parseInt(bpmSlider.value, 10);
     let resetAfterTime = 60000 / bpm * resetAfterSilenceBeats;
-    if (accumulatedTime > resetAfterTime) {
-        notes = []; // start over once too old
-    }
-    transcribe(notes);
+    transcribe();
     document.getElementById('debug').innerText = `${currentBeat} ${notes.length}`;
     for (let i = notes.length - 1; i >= 0; i--) {
         const n = notes[i];
