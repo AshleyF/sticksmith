@@ -31,12 +31,11 @@ const canvasTimeSpan = 5; // Time span in seconds that the canvas represents
 const pixelsPerMs = timeSeriesCanvas.width / (canvasTimeSpan * 1000); // Pixels per millisecond
 const flamThreshold = 100; // TODO: relative to BPM? Time in milliseconds for close succession
 const beatsPerMeasure = 4; // Number of beats in a measure
-const resetAfterSilenceBeats = 6; // Time span in seconds after which we reset
+const resetAfterSilenceBeats = 4; // Time span in seconds after which we reset
 
 let notes = []; // Array to store MIDI velocities and timestamps
-let firstNoteTime = performance.now();
-
-let lastNoteTime = performance.now();
+let firstNoteTime = 0;
+let lastNoteTime = 0;
 function record(instrument, velocity, time) {
     // TODO: instruments
     let bpm = parseInt(bpmSlider.value, 10);
@@ -44,12 +43,14 @@ function record(instrument, velocity, time) {
     if (performance.now() - lastNoteTime > resetAfterTime) {
         notes = []; // start over once too old
     }
-    const elapsed = time - lastNoteTime;
-    if (notes.length == 0) {
-        firstNoteTime = time;
+    const isFirstNote = notes.length === 0;
+    if (isFirstNote) {
+        firstNoteTime = performance.now();
     }
+    const elapsed = isFirstNote ? 0 : time - lastNoteTime;
+    lastNoteTime = isFirstNote ? firstNoteTime : time;
     notes.push({ velocity, elapsed });
-    lastNoteTime = time;
+    console.log(`Recorded note: Instrument: ${instrument}, Velocity: ${velocity}, Elapsed: ${elapsed} ms`);
 }
 
 const dpr = window.devicePixelRatio || 1; // Get the device pixel ratio (default to 1)
@@ -211,24 +212,29 @@ function transcribe() {
         if (time > (whole / 16) * 0.75) return 16;
         return 32;
     }
+
     drawStaff();
-    if (notes.length == 0) {
+    if (notes.length === 0) {
         return;
     }
+
     let bpm = parseInt(bpmSlider.value, 10);
     const whole = 1000 * 60 / bpm * 4;
     let column = 0;
+
     for (let i = 0; i < notes.length; i++) {
         const n0 = notes[i];
         const n1 = notes[i + 1];
         let special = n0.velocity < 60 ? 'ghost' : (n0.velocity > 115 ? 'accent' : 'normal');
+
         if (i < notes.length - 1) {
-            let time = n0.elapsed;
+            let time = n1.elapsed;
             if (n1.velocity > n0.velocity && n1.elapsed < flamThreshold) { // flam?
                 special = 'flam';
-                time += n1.elapsed;
+                time += n0.elapsed;
                 i++;
             }
+
             var n = noteValue(time);
             drawNote(column, n, special);
             column += 32 / n;
@@ -236,9 +242,25 @@ function transcribe() {
             drawNote(column, 0, special); // Draw the last note as red cursor
         }
     }
-    if (column > 32 * 4) {
-        notes = []; // start over
+
+    const elapsedTimes = [];
+    const velocities = [];
+    const notesWindowSize = 8;
+    for (let i = notes.length - 1; i >= Math.max(notes.length - notesWindowSize, 1 /* not including first note */); i--) {
+        const n = notes[i];
+        elapsedTimes.push(n.elapsed);
+        velocities.push(n.velocity);
     }
+    const timingConsistency = calculateStandardDeviation(elapsedTimes);
+    const dynamicsConsistency = calculateStandardDeviation(velocities);
+    const averageElapsedTime = elapsedTimes.reduce((sum, time) => sum + time, 0) / elapsedTimes.length;
+    const averageBPM = 60000 / averageElapsedTime;
+    document.getElementById('debug').innerText = `Timing: ${timingConsistency.toFixed(2)} ms, Dynamics: ${dynamicsConsistency.toFixed(2)}, BPM: ${averageBPM.toFixed(1)}`;
+    drawConsistencyEllipse(timingConsistency, dynamicsConsistency);
+
+    //if (column > 32 * 4) {
+    //    notes = []; // start over
+    //}
     if (notes.length > 0) {
         const now = performance.now();
         const elapsed = now - firstNoteTime;
@@ -253,9 +275,8 @@ function display() {
     const now = performance.now();
     let accumulatedTime = now - lastNoteTime;
     let bpm = parseInt(bpmSlider.value, 10);
-    let resetAfterTime = 60000 / bpm * resetAfterSilenceBeats;
     transcribe();
-    document.getElementById('debug').innerText = `${currentBeat} ${notes.length}`;
+    //document.getElementById('debug').innerText = `${currentBeat} ${notes.length}`;
     for (let i = notes.length - 1; i >= 0; i--) {
         const n = notes[i];
         const x = timeSeriesCanvas.width - accumulatedTime * pixelsPerMs; // Calculate x-coordinate
@@ -314,8 +335,8 @@ document.getElementById('midiBtn').onclick = async () => {
     } else {
         await initializeMIDI();
     }
-    document.getElementById('midiBtn').innerText = midiEnabled ? 'Disable MIDI' : 'Enable MIDI';
     midiEnabled = !midiEnabled;
+    document.getElementById('midiBtn').innerText = midiEnabled ? 'Disable MIDI' : 'Enable MIDI';
 };
 
 document.addEventListener('keydown', (event) => {
@@ -421,6 +442,26 @@ metronomeBtn.addEventListener('click', () => {
 });
 
 display();
+
+function calculateStandardDeviation(values) {
+    if (values.length < 2) return 0; // Not enough data to calculate
+    const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+    const variance = values.reduce((sum, value) => sum + Math.pow(value - mean, 2), 0) / (values.length - 1);
+    return Math.sqrt(variance);
+}
+
+function drawConsistencyEllipse(timingConsistency, dynamicsConsistency) {
+    const centerX = timeSeriesCanvas.width / 2; // Center horizontally
+    const centerY = timeSeriesCanvas.height / 2; // Center vertically
+    const maxSize = timeSeriesCanvas.height; // Maximum size for the ellipse
+    const width = Math.max(1, Math.min(timingConsistency * 2, maxSize)); // Scale timing consistency
+    const height = Math.max(1, Math.min(dynamicsConsistency * 2, maxSize)); // Scale dynamics consistency
+    console.log(`Drawing ellipse at (${centerX}, ${centerY}) with width ${width} and height ${height}`);
+    timeCtx.beginPath();
+    timeCtx.ellipse(centerX, centerY, width / 2, height / 2, 0, 0, 2 * Math.PI);
+    timeCtx.fillStyle = 'red';
+    timeCtx.fill();
+}
         </script>
     </body>
 </html>
