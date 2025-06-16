@@ -1,6 +1,5 @@
 ﻿open System
 open System.IO
-open System.Threading
 open System.Timers
 open NAudio.Midi
 open NAudio.Wave
@@ -104,26 +103,21 @@ let writeMidiOutput () =
     midiOut.Reset()
 
     let note = 38        // Snare (D1)
-    let velocity = 100   // Hit strength (1–127)
     let channel = 9      // MIDI channel 10 (zero-based index)
 
-    //let noteOn = MidiMessage.StartNote(note, velocity, channel)
-    //let noteOn = new NoteOnEvent(0, channel, note, velocity, 10)
     let noteOff = MidiMessage.StopNote(note, 0, channel)
 
     use port = new SerialPort("COM5", 115200, Parity.None, 8, StopBits.One)
     port.DtrEnable <- true
     port.RtsEnable <- true
-    //port.DataReceived.Add(fun _ ->
-            //)
+    port.DataReceived.Add(fun _ ->
+        while port.BytesToRead > 0 do
+            let velocity = port.ReadByte()
+            let noteOn = MidiMessage.StartNote(note, velocity, channel)
+            midiOut.Send(noteOn.RawData)
+            midiOut.Send(noteOff.RawData)
+            printfn "Velocity: %i" velocity)
     port.Open()
-    while true do
-        let velocity = port.ReadByte()
-        let noteOn = MidiMessage.StartNote(note, velocity, channel)
-        midiOut.Send(noteOn.RawData)
-        Thread.Sleep(100) // Hold briefly
-        midiOut.Send(noteOff.RawData)
-        printfn "Velocity: %i" velocity
 
     Console.ReadLine() |> ignore
 

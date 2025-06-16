@@ -5,7 +5,6 @@ void setup() {
   //analogReadResolution(12);  // Optional: set 12-bit resolution (0–4095)
   Serial.begin(115200);
   while (!Serial);  // Wait for USB serial on Pico W
-  Serial.println("---------------------------------------------------");
 }
 
 unsigned long ms;
@@ -34,7 +33,7 @@ void loop() {
       }
       if (value < peak - RING)
       {
-        byte velocity = (peak - ATTACK_THRESHOLD) * 126 / RANGE + 1; // 1 - 127
+        byte velocity = ((peak - ATTACK_THRESHOLD) * 126 / RANGE) + 1; // 1 - 127
         //digitalWrite(LED_BUILTIN, HIGH);
         Serial.write(velocity);
         Serial.flush();
