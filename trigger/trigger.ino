@@ -11,16 +11,15 @@ unsigned long ms;
 int peak = 0;
 int mode = 0;
 
-const int ATTACK_THRESHOLD = 260;
-const int DECAY_THRESHOLD = 250;
-const int RING = 10;
-const unsigned long DELAY = 40;
-const int MAX = 1024;
-const int RANGE = MAX - ATTACK_THRESHOLD;
+const int ATTACK_THRESHOLD = 40;
+const int DECAY_THRESHOLD = 30;
+const int RING = 5;
+const unsigned long DELAY = 10;
+const double MAX = 1023;
+const double RANGE = MAX - ATTACK_THRESHOLD;
 
 void loop() {
   int value = analogRead(adcPin);  // Read from ADC2 (GPIO 28)
-
   //Serial.println(value);
 
   switch (mode)
@@ -33,9 +32,10 @@ void loop() {
       }
       if (value < peak - RING)
       {
-        byte velocity = ((peak - ATTACK_THRESHOLD) * 126 / RANGE) + 1; // 1 - 127
+        byte velocity = ((double)(peak - ATTACK_THRESHOLD) * 126.0 / RANGE) + 1.5; // 1 - 127
         //digitalWrite(LED_BUILTIN, HIGH);
         Serial.write(velocity);
+        //Serial.println(peak);
         Serial.flush();
         yield();
         //delay(100);
@@ -46,7 +46,7 @@ void loop() {
       break;
     case 1: // waiting for decay
       unsigned long elapsed = millis() - ms;
-      if (elapsed > DELAY && value < DECAY_THRESHOLD)
+      if (elapsed > DELAY && value < max(peak - DECAY_THRESHOLD, DECAY_THRESHOLD))
       {
         //Serial.println("----");
         peak = 0;
