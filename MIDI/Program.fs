@@ -112,11 +112,12 @@ let writeMidiOutput () =
     port.RtsEnable <- true
     port.DataReceived.Add(fun _ ->
         while port.BytesToRead > 0 do
-            let velocity = port.ReadByte()
+            let b = port.ReadByte();
+            let velocity = b >>> 1;
             let noteOn = MidiMessage.StartNote(note, velocity, channel)
             midiOut.Send(noteOn.RawData)
             midiOut.Send(noteOff.RawData)
-            printfn "Velocity: %i" velocity)
+            printfn "Velocity: %i (%i)" velocity b)
     port.Open()
 
     Console.ReadLine() |> ignore
