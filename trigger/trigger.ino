@@ -11,60 +11,70 @@ const double GAIN = 5.0;
 const int THRESHOLD = 25 * GAIN; // observed 110
 const double MAX = 1023;
 const double RANGE = MAX - THRESHOLD;
-const unsigned long DELAY = 18000; // observed 1.1-1.7ms
+const unsigned long DELAY = 30000; // observed 1.1-1.7ms
 const unsigned long MASK = 60000; // observed 500-700ms
 
-unsigned long hitTime;
-int peak = THRESHOLD;
-int mode = 0; // waiting for hit
+int trigger(int value, unsigned long time, unsigned long *hitTime, unsigned long *peakTime, int *peak, int *mode)
+{
+  if (*mode < 2 && value > *peak)
+  {
+    *peak = value;
+    *peakTime = time;
+    if (*mode == 0 /* waiting for hit */)
+    {
+      *hitTime = time;
+      *mode = 1; // delay for peak
+    }
+  }
+  if (*mode > 0)
+  {
+    unsigned long elapsed = time - *hitTime;
+    if (*mode == 1 /* delay for peak*/ && elapsed > DELAY)
+    {
+#ifdef DEBUG
+      Serial.print("hit ");
+      Serial.print(*peak);
+      Serial.print(" peak: ");
+      Serial.print(*peakTime - *hitTime);
+#endif
+      int hit = *peak;
+      *peak = THRESHOLD;
+      *mode = 2 /* wait for decay*/;
+      return hit;
+    }
+    if (*mode == 2 && value < THRESHOLD)
+    {
+#ifdef DEBUG
+      Serial.print(" decay: ");
+      Serial.println(time - *hitTime);
+#endif
+      *mode = 3; // wait for mask time
+    }
+    if (*mode == 3 /* mask for decay*/ && elapsed > MASK)
+    {
+      *mode = 0; // waiting for hit
+    }
+  }
+  return 0;
+}
 
-unsigned long peakTime;
+unsigned long hitTime0;
+unsigned long peakTime0;
+
+int peak0 = THRESHOLD;
+int mode0 = 0; // waiting for hit
 
 void loop() {
   int value = analogRead(adcPin) * GAIN;  // Read from ADC2 (GPIO 28)
   //Serial.println(value);
   unsigned long time = micros();
-  if (mode < 2 && value > peak)
+  int hit = trigger(value, time, &hitTime0, &peakTime0, &peak0, &mode0);
+  if (hit > 0)
   {
-    peak = value;
-    peakTime = time;
-    if (mode == 0 /* waiting for hit */)
-    {
-      hitTime = time;
-      mode = 1; // delay for peak
-    }
-  }
-  if (mode > 0)
-  {
-    unsigned long elapsed = time - hitTime;
-    if (mode == 1 /* delay for peak*/ && elapsed > DELAY)
-    {
-#ifdef DEBUG
-      Serial.print("hit ");
-      Serial.print(peak);
-      Serial.print(" peak: ");
-      Serial.print(peakTime - hitTime);
-#else
-      byte velocity = ((double)(peak - THRESHOLD) * 255 / RANGE) + 0.5; // 1 - 127
-      Serial.write(velocity);
-#endif
-      Serial.flush();
-      yield();
-      peak = THRESHOLD;
-      mode = 2 /* wait for decay*/;
-    }
-    if (mode == 2 && value < THRESHOLD)
-    {
-#ifdef DEBUG
-      Serial.print(" decay: ");
-      Serial.println(time - hitTime);
-#endif
-      mode = 3; // wait for mask time
-    }
-    if (mode == 3 /* mask for decay*/ && elapsed > MASK)
-    {
-      mode = 0; // waiting for hit
-    }
+    byte velocity = ((double)(hit - THRESHOLD) * 255 / RANGE) + 0.5; // 1 - 127
+    Serial.write(velocity);
+    Serial.flush();
+    yield();
   }
 }
 
