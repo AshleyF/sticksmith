@@ -18,6 +18,7 @@ type Instrument =
     | FloorTom
     | Kick
     | Hat
+    | OpenHat
     | Ride
     | Crash1
     | Crash2

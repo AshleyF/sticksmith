@@ -13,7 +13,6 @@ let play (cancel: CancellationToken) (sequence: Sequence) =
             task {
                 let delay = (start + offset) - DateTime.UtcNow
                 if delay > TimeSpan.Zero then
-                    printfn "Waiting for %A %A" offset delay
                     do! Task.Delay(delay, cancel)
                 if not cancel.IsCancellationRequested then
                     play' sequence

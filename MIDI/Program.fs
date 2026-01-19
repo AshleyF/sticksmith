@@ -12,7 +12,18 @@ let kick = Music.repeated 1000 (drum 1.0 Center Kick) (beat 0) (beat 2)
 let snare = Music.repeated 1000 (drum 0.5 Center Snare) (beat 1) (beat 2)
 let hat = Music.repeated 2000 (drum 0.5 Edge Hat) (beat 0) (Music.Beat(1, 8))
 
-let money = kick |> Music.combine<Drum> snare |> Music.combine<Drum> hat
+let money =
+    kick
+    |> Music.combine<Drum> snare
+    |> Music.combine<Drum> hat
+
+let ghost =
+    Music.repeated 1000 (drum 0.1 Center Snare) (Music.Beat(3, 8)) (beat 2)
+    |> Music.combine<Drum> money
+
+let extraKick =
+    Music.repeated 1000 (drum 1.0 Center Kick) (Music.Beat(5, 8)) (beat 4)
+    |> Music.combine<Drum> ghost
 
 money |> Seq.take 10 |> List.ofSeq |> printfn "Money: %A"
 money |> Seq.take 10 |> Music.commonBeat |> printfn "Common Beat: %A"
@@ -24,13 +35,18 @@ let noteToMidiAction (note: Drum) () =
     let hit note v =
         device.Send(NoteOn (note, v))
         device.Send(NoteOff note)
+    let openHat () = device.Send(Control { Value = 127; Controller = 4 })
+    let closeHat () = device.Send(Control { Value = 0; Controller = 4 })
     match note with
     | Kick, Center, v -> hit 36 v
     | Snare, Center, v -> hit 38 v
     | Snare, Edge, v -> hit 33 v
-    | HighTom, Center, v -> hit 45 v
+    | HighTom, Center, v -> hit 48 v
+    | MidTom, Center, v -> hit 47 v
+    | LowTom, Center, v -> hit 45 v
     | FloorTom, Center, v -> hit 43 v
     | Hat, Edge, v -> hit 42 v
+    | OpenHat, Edge, v -> openHat (); hit 42 v; closeHat ()
     | Crash1, Bow, v -> hit 49 v
     //printfn "Send %A %A" note DateTime.Now
 
@@ -38,9 +54,41 @@ let beatToTimeSpan (bmp: int) (beat: Music.Beat) =
     let ticksPerBeat = TimeSpan.FromMinutes(1.0).Ticks / int64 bmp
     TimeSpan.FromTicks(int64 (float ticksPerBeat * beat.ToFloat()))
 
-money
-|> Seq.map (fun (notes, beat) -> List.map noteToMidiAction notes, beatToTimeSpan 40 beat)
+let blackHoleSun =
+    Music.combineAll
+        [
+            //1 2 3 4 1 2 3 4 1 2 3 4 1 2 3 4 1 2 3 4 1 2 3 4 1 2 3 4 1 2 3 4 
+            ("*_______________________________________________________*_______" |> Music.score (drum 1.0 Bow Crash1) (Music.Beat(1, 8)))
+            ("________*_______*_______*_______*_______*_______*_______________" |> Music.score (drum 1.0 Edge OpenHat) (Music.Beat(1, 8)))
+            ("__******__******__******__******__******__******__******__*_*___" |> Music.score (drum 1.0 Edge Hat) (Music.Beat(1, 8)))
+            ("____*_______*_______*_______*_______*_______*_______*___________" |> Music.score (drum 1.0 Center Snare) (Music.Beat(1, 8)))
+            ("*_______*_______*_______*_*__*_**_______*____*_**__*_*_**____*__" |> Music.score (drum 1.0 Center Kick) (Music.Beat(1, 8)))
+            ("______________________________________________________________*_" |> Music.score (drum 1.0 Center LowTom) (Music.Beat(1, 8)))
+            ("______________________________________________________________*_" |> Music.score (drum 1.0 Center FloorTom) (Music.Beat(1, 8)))
+        ]
+
+//money
+//ghost
+//extraKick
+blackHoleSun
+//|> List.iter (printfn "WTF %A")
+|> Seq.map (fun (notes, beat) -> List.map noteToMidiAction notes, beatToTimeSpan 30 beat)
 |> Sequencer.play cancellation.Token
+
+Console.ReadLine() |> ignore
+blackHoleSun |> Seq.map (fun (notes, beat) -> List.map noteToMidiAction notes, beatToTimeSpan 30 beat) |> Sequencer.play cancellation.Token
+Console.ReadLine() |> ignore
+blackHoleSun |> Seq.map (fun (notes, beat) -> List.map noteToMidiAction notes, beatToTimeSpan 30 beat) |> Sequencer.play cancellation.Token
+Console.ReadLine() |> ignore
+blackHoleSun |> Seq.map (fun (notes, beat) -> List.map noteToMidiAction notes, beatToTimeSpan 30 beat) |> Sequencer.play cancellation.Token
+Console.ReadLine() |> ignore
+blackHoleSun |> Seq.map (fun (notes, beat) -> List.map noteToMidiAction notes, beatToTimeSpan 30 beat) |> Sequencer.play cancellation.Token
+Console.ReadLine() |> ignore
+blackHoleSun |> Seq.map (fun (notes, beat) -> List.map noteToMidiAction notes, beatToTimeSpan 30 beat) |> Sequencer.play cancellation.Token
+Console.ReadLine() |> ignore
+blackHoleSun |> Seq.map (fun (notes, beat) -> List.map noteToMidiAction notes, beatToTimeSpan 30 beat) |> Sequencer.play cancellation.Token
+Console.ReadLine() |> ignore
+blackHoleSun |> Seq.map (fun (notes, beat) -> List.map noteToMidiAction notes, beatToTimeSpan 30 beat) |> Sequencer.play cancellation.Token
 
 Console.ReadLine() |> ignore
 cancellation.Cancel()

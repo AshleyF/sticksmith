@@ -25,11 +25,11 @@ type Device(index, channel) =
     member this.Send(midi) =
         match midi with
         | NoteOn (note, velocity) ->
-            printfn "NoteOn %A (%A)" note velocity
+            //printfn "NoteOn %A (%A)" note velocity
             out.Send(MidiMessage.StartNote(note, int (velocity * 127.0), channel).RawData)
         | NoteOff note ->
-            printfn "NoteOff %A" note
+            //printfn "NoteOff %A" note
             out.Send(MidiMessage.StopNote(note, 0, channel).RawData)
         | Control change ->
-            printfn "Control %A" change
+            //printfn "Control %A" change
             out.Send(MidiMessage.ChangeControl(change.Controller, change.Value, channel).RawData)

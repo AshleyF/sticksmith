@@ -77,11 +77,22 @@ let repeated<'a> times note (start: Beat) (interval: Beat) : Music<'a> =
 let combine<'a> (m: Music<'a>) (n: Music<'a>) : Music<'a> =
     let combine' (m': Music<'a>, n': Music<'a>) =
         match m', n' with
-        | (mh :: mt), (nh :: nt) ->
-            let mb = snd mh
-            let nb = snd nh
+        | ((_, mb) as mh :: mt), ((_, nb) as nh :: nt) ->
             if mb < nb then Some (mh, (mt, n'))
             elif nb < mb then Some (nh, (m', nt))
             else Some ((fst mh @ fst nh, mb), (mt, nt))
         | _, [] | [], _ -> None
     List.unfold combine' (m, n)
+
+let combineAll<'a> (ms: Music<'a> list) : Music<'a> =
+    List.reduce combine ms
+
+let score<'a> (note: Note<'a>) (interval: Beat) (sequence: string) : Music<'a> =
+    let mapNotation = function
+        | '*' -> [note]
+        | '_' -> []
+        | c   -> failwith $"Invalid notation character: '{c}"
+    sequence
+    |> Seq.map mapNotation
+    |> List.ofSeq
+    |> List.mapi (fun i ns -> (ns, interval * (i + 1)))

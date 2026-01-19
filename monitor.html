@@ -12,11 +12,11 @@
 // Match buffer for incoming MIDI notes (last 10 seconds)
 window._matchOrigin = performance.now();
 window._matchBuffer = [];
-const MATCH_WINDOW = 5000;
+const MATCH_WINDOW = 3000;
 
-function addMatchNoteAt(nowTimeMs, velocity) {
+function addMatchNoteAt(nowTimeMs, velocity, sticking) {
   const t = nowTimeMs - window._matchOrigin;
-  window._matchBuffer.push({ time: t, velocity: Number(velocity || 0), sticking: '' });
+  window._matchBuffer.push({ time: t, velocity: Number(velocity || 0), sticking: sticking || '' });
   // prune old notes
   // Use a dynamic match window based on the extended pattern length
   const patternLength = window._extendedPattern[window._extendedPattern.length - 1].time - window._extendedPattern[0].time;
@@ -33,12 +33,36 @@ function addMatchNoteAt(nowTimeMs, velocity) {
     // call search using the same pattern setup used elsewhere, with normalized times
     try {
       console.log('Calling search with normalized match buffer (' + normalized.length + ' events)');
-      search(window._extendedPattern, normalized, 0.1, 0.0);
+      search(window._extendedPattern, normalized, 1, 1);
     } catch (err) {
       console.error('Search failed:', err);
     }
   }
 }
+
+// Keyboard test input
+// Right-hand sticking: E = normal, N = ghost, I = accent
+// Left-hand sticking:  S = normal, R = ghost, T = accent
+window.addEventListener('keydown', (evt) => {
+  const key = (evt.key || '').toLowerCase();
+  const now = performance.now();
+  if (key === 'e') {
+    addMatchNoteAt(now, 64, 'R');
+  } else if (key === 'n') {
+    addMatchNoteAt(now, 127, 'R');
+  } else if (key === 'i') {
+    addMatchNoteAt(now, 32, 'R');
+  } else if (key === 's') {
+    addMatchNoteAt(now, 64, 'L');
+  } else if (key === 'r') {
+    addMatchNoteAt(now, 32, 'L');
+  } else if (key === 't') {
+    addMatchNoteAt(now, 127, 'L');
+  } else {
+    return;
+  }
+  evt.preventDefault();
+});
 
 function handleInputsAndOutputs(midiAccess) {
   console.log("Listing MIDI inputs and outputs:");
@@ -164,7 +188,7 @@ async function requestMidiAccess()
 }
 
 // Use an async IIFE so we can await feature checks and API calls.
-(async function checkMidiPermission() {
+async function checkMidiPermission() {
   // If Permissions API or its query method isn't present, fall back.
   const hasPermissionsAPI = !!navigator.permissions && typeof navigator.permissions.query === "function";
 
@@ -192,45 +216,57 @@ async function requestMidiAccess()
   } else {
     console.log("Permissions API/query not available in this browser.");
   }
-})();
+}
 
+// Manually extended paradiddle (4 cycles: -2, -1, 0, 1) with symbolic velocities: 'A' (accent), 'G' (ghost), 'N'/' ' normal
 var paradiddle = [
-  { time:    0, velocity: 'A', sticking: 'R' },
-  { time:  200, velocity: ' ', sticking: 'L' },
-  { time:  400, velocity: ' ', sticking: 'R' },
-  { time:  600, velocity: ' ', sticking: 'R' },
-  { time:  800, velocity: 'A', sticking: 'L' },
-  { time: 1000, velocity: ' ', sticking: 'R' },
-  { time: 1200, velocity: ' ', sticking: 'L' },
-  { time: 1400, velocity: ' ', sticking: 'L' }
+  { time:     0, velocity: 'A', sticking: 'R' },
+  { time:   200, velocity: 'N', sticking: 'L' },
+  { time:   400, velocity: 'N', sticking: 'R' },
+  { time:   600, velocity: 'N', sticking: 'R' },
+  { time:   800, velocity: 'A', sticking: 'L' },
+  { time:  1000, velocity: 'N', sticking: 'R' },
+  { time:  1200, velocity: 'N', sticking: 'L' },
+  { time:  1400, velocity: 'N', sticking: 'L' },
+  // second cycle
+  { time:  1600, velocity: 'A', sticking: 'R' },
+  { time:  1800, velocity: 'N', sticking: 'L' },
+  { time:  2000, velocity: 'N', sticking: 'R' },
+  { time:  2200, velocity: 'N', sticking: 'R' },
+  { time:  2400, velocity: 'A', sticking: 'L' },
+  { time:  2600, velocity: 'N', sticking: 'R' },
+  { time:  2800, velocity: 'N', sticking: 'L' },
+  { time:  3000, velocity: 'N', sticking: 'L' },
 ];
 
 var diddle0 = [
-  { time:    0, velocity: 170, sticking: 'R' },
-  { time:  100, velocity: 100, sticking: 'L' },
+  // { time:    0, velocity: 170, sticking: 'R' },
+  { time:    0, velocity: 100, sticking: 'L' },
+  { time:  100, velocity: 100, sticking: 'R' },
   { time:  200, velocity: 100, sticking: 'R' },
-  { time:  300, velocity: 100, sticking: 'R' }
+  { time:  300, velocity: 170, sticking: 'L' }
 ]
 
-function extend(gap, pattern) {
-  var extended = [];
-  var lastTime = pattern[pattern.length - 1].time;
-  gap = gap || 0; // default to 0 if not provided
-  var period = lastTime + gap; // pattern period including gap
-  // Extend 2 times in the past and 2 times in the future (4x total)
-  // All 8 notes from each cycle (the gap prevents time collisions at boundaries)
-  for (var i = -2; i < 2; i++) {
-    for (var j = 0; j < pattern.length; j++) {
-      var p = pattern[j];
-      extended.push({
-        time: p.time + (i * period),
-        velocity: p.velocity,
-        sticking: p.sticking
-      });
-    }
-  }
-  return extended;
-}
+diddle1 = [
+  {"time":0,"velocity":23,"sticking":""},
+  {"time":186.69999998807907,"velocity":45,"sticking":""}]
+
+diddle2 = [
+  {"time":0,"velocity":127,"sticking":""},
+  {"time":267.30000001192093,"velocity":32.49999999999999,"sticking":""},
+  {"time":516.1000000238419,"velocity":32.49999999999999,"sticking":""}]
+
+diddle3 = [
+  {"time":0,"velocity":40.66666666666667,"sticking":""},
+  {"time":224.39999997615814,"velocity":33.66666666666667,"sticking":""},
+  {"time":486.19999998807907,"velocity":127,"sticking":""},
+  {"time":770,"velocity":54.66666666666667,"sticking":""}] 
+
+diddle4 = [
+  {"time":0,"velocity":43.53503184713376,"sticking":""},
+  {"time":283.19999998807907,"velocity":127,"sticking":""},
+  {"time":583,"velocity":51.560509554140125,"sticking":""},
+  {"time":812.5,"velocity":33.904458598726116,"sticking":""}]
 
 function score(pattern, match, velocityWeight, stickingWeight) {
   function square(x) { return x * x; }
@@ -245,28 +281,49 @@ function score(pattern, match, velocityWeight, stickingWeight) {
       break;
     }
     var p = null;
-    var pj = Number.MIN_VALUE;
     var d = Number.MAX_VALUE;
+    var pj = -1;
     for (var j = 0; j < pattern.length; j++) {
       var pp = pattern[j];
       var dd = square(pp.time - m.time);
       if (dd < d) {
-        const stickingPenalty = (m.sticking === '' || pp.sticking == m.sticking) ? 0 : stickingWeight;
+        const stickingPenalty = (m.sticking === '' || pp.sticking == m.sticking) ? 0 : stickingWeight * 1000;
         d = dd + (square(pp.velocity - m.velocity) * velocityWeight) + stickingPenalty;
-        if (alreadyMatched[j]) {
-          d += 1000; // penalize matching the same pattern note repeatedly
-        }
         p = pp;
         pj = j;
       }
     }
-    alreadyMatched[pj] = true;
+    if (pj >= 0 && alreadyMatched[pj]) {
+      // Strongly penalize reusing the same pattern beat for multiple match notes
+      d += 10000;
+    }
+    if (pj >= 0) {
+      alreadyMatched[pj] = true;
+    }
     // Weight by exponential growth: notes closer to pattern start have near-zero weight,
     // notes toward the end have higher weight. Uses (1 - exp(-t)) to approach 1 asymptotically
     var timeFromStart = m.time - start;
-    var weight = 1 - Math.exp(-timeFromStart / 2000); // approaches 1 as time increases
+    var weight = 1 - Math.exp(-timeFromStart / 3000); // approaches 1 as time increases
     s += d * weight;
     c++;
+  }
+  // Penalize gaps: pattern beats between the first and last matched beat that remain unmatched
+  var firstIdx = -1;
+  var lastIdx = -1;
+  for (var k = 0; k < pattern.length; k++) {
+    if (alreadyMatched[k]) {
+      if (firstIdx === -1) firstIdx = k;
+      lastIdx = k;
+    }
+  }
+  if (firstIdx !== -1 && lastIdx > firstIdx) {
+    var gapUnmatched = 0;
+    for (var k2 = firstIdx; k2 <= lastIdx; k2++) {
+      if (!alreadyMatched[k2]) gapUnmatched++;
+    }
+    if (gapUnmatched > 0) {
+      s += gapUnmatched * 5000; // penalty per skipped beat inside the matched window
+    }
   }
   return Math.sqrt(s / c);
 }
@@ -284,17 +341,12 @@ function scaleTime(pattern, factor) { // assumes 0 origin time
   return scaled;
 }
 
-function setVelocity(pattern, normal, accent, ghost) {
-  var scaled = [];
-  for (var i = 0; i < pattern.length; i++) {
-    var p = pattern[i];
-    scaled.push({
-      time: p.time,
-      velocity: p.velocity == 'A' ? accent : (p.velocity == 'G' ? ghost : normal),
-      sticking: p.sticking
-    });
-  }
-  return scaled;
+function toNumericVelocity(v) {
+  if (typeof v === 'number') return v;
+  if (v === 'A') return 127;
+  if (v === 'G') return 32;
+  // treat N, space, empty, undefined as normal
+  return 64;
 }
 
 function translateTime(pattern, offset) {
@@ -321,6 +373,8 @@ function renderPatternMatch(pattern, match, scale, translate) {
   const ctx = canvas.getContext('2d');
   const W = canvas.width;
   const H = canvas.height;
+  const barWidth = 6;
+  const halfBar = barWidth / 2;
   ctx.clearRect(0, 0, W, H);
 
   if (!pattern || !pattern.length) return;
@@ -334,18 +388,12 @@ function renderPatternMatch(pattern, match, scale, translate) {
   const patTimes = renderPattern.map((p) => Number(p.time));
   let minTime = Math.min.apply(null, patTimes);
   let maxTime = Math.max.apply(null, patTimes);
-  
-  // If match is provided (already scaled and translated), include its bounds
-  if (match && match.length) {
-    const matchTimes = match.map((m) => Number(m.time));
-    const matchMin = Math.min.apply(null, matchTimes);
-    const matchMax = Math.max.apply(null, matchTimes);
-    minTime = Math.min(minTime, matchMin);
-    maxTime = Math.max(maxTime, matchMax);
-  }
   const timeRange = Math.max(1, maxTime - minTime);
 
-  const mapX = (t) => padding + ((t - minTime) / timeRange) * (W - padding * 2);
+  const leftPad = padding + halfBar;
+  const rightPad = padding + halfBar;
+  const usableWidth = Math.max(1, W - leftPad - rightPad);
+  const mapX = (t) => leftPad + ((t - minTime) / timeRange) * usableWidth;
 
   // Layout vertically into two bands (pattern top, match bottom).
   const available = H - padding * 2;
@@ -358,24 +406,24 @@ function renderPatternMatch(pattern, match, scale, translate) {
   const matchBaseline = padding + bandHeight * 2 - (labelHeight + labelMargin); // lifted so labels fit below
 
   // velocity -> bar height (clamped to band height so bars never go off-canvas)
-  const velValues = renderPattern.map((p) => Number(p.velocity || 0)).concat((match || []).map((m) => Number(m.velocity || 0)));
+  const velValues = renderPattern.map((p) => toNumericVelocity(p.velocity)).concat((match || []).map((m) => toNumericVelocity(m.velocity)));
   const maxVel = Math.max(1, Math.max.apply(null, velValues));
   const velToHeight = (v) => {
-    const norm = Math.max(0, Math.min(127, Number(v || 0))) / Math.max(1, maxVel);
+    const norm = Math.max(0, Math.min(127, toNumericVelocity(v))) / Math.max(1, maxVel);
     return norm * (bandHeight * 0.8); // leave a small margin inside each band
   };
 
   // Draw pattern bars (background) on the top band
   ctx.textAlign = 'center';
   ctx.font = '12px sans-serif';
-  // Now renderPattern only contains the middle cycle (8 notes), so show all sticking labels
+  // Render all sticking labels across the extended pattern
   for (let i = 0; i < renderPattern.length; i++) {
     const p = renderPattern[i];
     const x = mapX(p.time);
     const h = velToHeight(p.velocity);
     // gray bar for pattern (ensure it stays in the top band)
     ctx.fillStyle = '#cccccc';
-    ctx.fillRect(x - 3, patternBaseline - h, 6, h);
+    ctx.fillRect(x - halfBar, patternBaseline - h, barWidth, h);
     // sticking label aligned to the top of the top band
     if (p.sticking) {
       ctx.fillStyle = '#222';
@@ -393,7 +441,7 @@ function renderPatternMatch(pattern, match, scale, translate) {
       const h = velToHeight(m.velocity);
       // blue bar for match (ensure it stays in the bottom band)
       ctx.fillStyle = 'rgba(30,144,255,0.85)'; // dodgerblue
-      ctx.fillRect(x - 3, matchBaseline - h, 6, h);
+      ctx.fillRect(x - halfBar, matchBaseline - h, barWidth, h);
       // sticking label for match (draw all labels)
       if (m.sticking) {
         // Draw the sticking label in blue and below the match bar.
@@ -407,8 +455,8 @@ function renderPatternMatch(pattern, match, scale, translate) {
     // Draw a faint line connecting match and pattern center to indicate offset/scale
     ctx.strokeStyle = 'rgba(0,0,0,0.1)';
     ctx.beginPath();
-    ctx.moveTo(padding, H / 2);
-    ctx.lineTo(W - padding, H / 2);
+    ctx.moveTo(leftPad, H / 2);
+    ctx.lineTo(W - rightPad, H / 2);
     ctx.stroke();
   }
 
@@ -419,51 +467,62 @@ function renderPatternMatch(pattern, match, scale, translate) {
 window._lastRender = null;
 
 function search(pattern, match, velocityWeight, stickingWeight) {
+  if (!match || !match.length) return;
+  // Compute velocity stats from the incoming match
+  const velocities = match.map((m) => Number(m.velocity || 0));
+  const vMin = Math.min.apply(null, velocities);
+  const vMax = Math.max.apply(null, velocities);
+  const vMean = velocities.reduce((sum, v) => sum + v, 0) / velocities.length;
+  const span = Math.max(1e-3, Math.max(vMax - vMean, vMean - vMin));
+  const targetGhost = 32;
+  const targetNormal = 64;
+  const targetAccent = 127;
+  // Normalize velocities toward ghost/normal/accent anchors, but keep tiny ranges near normal.
+  const normalizedMatch = match.map((m) => {
+    const v = Number(m.velocity || 0);
+    const z = (v - vMean) / span; // roughly -1..1 when data spans both sides of mean
+    const mapped = targetNormal + z * (targetAccent - targetNormal);
+    const clamped = Math.max(targetGhost, Math.min(targetAccent, mapped));
+    return { ...m, velocity: clamped };
+  });
+
   // Use the pattern exactly as provided by the caller. Do not extend here to
   // avoid duplicating repetitions when the caller already passed an extended pattern.
-  var pat = pattern;
+  var pat = pattern.map((p) => ({ time: p.time, velocity: toNumericVelocity(p.velocity), sticking: p.sticking }));
+
+  console.log('Searching (normalized): ' + JSON.stringify(normalizedMatch));
   
   // Filter match to only include notes within the pattern's time range
   var patMinTime = pat[0].time;
   var patMaxTime = pat[pat.length - 1].time;
-  var filteredMatch = match.filter((m) => m.time >= patMinTime && m.time <= patMaxTime);
-  
-  // If no notes in range, use original match (searching will still work, just won't match)
+  var filteredMatch = normalizedMatch.filter((m) => m.time >= patMinTime && m.time <= patMaxTime);
+
   if (filteredMatch.length === 0) {
-    filteredMatch = match;
+    return
   }
   
   var best = Number.MAX_VALUE;
   var bestScale = 1.0;
   var bestTranslate = 0;
   
-  // Get the last (most recent) match time for alignment strategy
-  var lastMatchTime = filteredMatch.length > 0 ? filteredMatch[filteredMatch.length - 1].time : 0;
-  
-  for (var st = 0.1; st <= 3.0; st += 0.1) {
-    // Explore translates so the most recent match note lands in the present cycle (around time 0-1400)
-    // Try centering on the middle of the present cycle first
-    var centerTranslate = -lastMatchTime + 700; // put last match note around middle of present cycle
-    var minTranslate = centerTranslate - 700; // allow to span from start to end of present cycle
-    var maxTranslate = centerTranslate + 700;
-    for (var tt = minTranslate; tt <= maxTranslate; tt += 10 * st) {
+  for (var st = 0.5; st <= 2.0; st += 0.1) {
+    for (var tt = 0; tt <= MATCH_WINDOW * 2; tt += 10 * st) {
       var scaledTime = scaleTime(filteredMatch, st);
       var translatedTime = translateTime(scaledTime, tt);
-      var s = score(pat, translatedTime, 0, 0);
-      //var s = score(pat, translatedTime, velocityWeight, stickingWeight);
+      var s = score(pat, translatedTime, velocityWeight, stickingWeight);
       //console.log("Score: " + s + " scale: " + st + " translate: " + tt + " (" + s + ")");
       if (s < best) {
         best = s;
         bestScale = st;
         bestTranslate = tt;
-        //console.log("Best score: " + best + " scale: " + st + " translate: " + tt + " (" + s + ")");
+        console.log("Best score: " + best + " scale: " + st + " translate: " + tt + " (" + s + ")");
       }
     }
   }
   // After searching, record the result and render the pattern and the best-matching transformed match on the canvas
   try {
     // Transform the match using the best scale/translate found
-    const scaledMatch = scaleTime(match, bestScale);
+    const scaledMatch = scaleTime(normalizedMatch, bestScale);
     const transformedMatch = translateTime(scaledMatch, bestTranslate);
     console.log('Best match found: scale=' + bestScale + ', translate=' + bestTranslate);
     console.log('  Transformed match times: ' + transformedMatch.map((m) => m.time.toFixed(0)).join(', '));
@@ -476,10 +535,35 @@ function search(pattern, match, velocityWeight, stickingWeight) {
   }
 }
 
-// Pre-compute the extended pattern once (after all functions are defined)
-window._extendedPattern = extend(200, setVelocity(paradiddle, 64, 127, 32));
+// Use the manually extended pattern as-is
+window._extendedPattern = paradiddle;
 
-search(window._extendedPattern, diddle0, 0.1, 0.0)
+window.setTimeout(() =>
+{
+  // alert("diddle0");
+  search(window._extendedPattern, diddle0, 1, 1);
+  window.setTimeout(() =>
+  {
+    //alert("diddle1");
+    search(window._extendedPattern, diddle1, 1, 1);
+    window.setTimeout(() =>
+    {
+      //alert("diddle2");
+      search(window._extendedPattern, diddle2, 1, 1);
+      window.setTimeout(() =>
+      {
+        //alert("diddle3");
+        search(window._extendedPattern, diddle3, 1, 1);
+        window.setTimeout(() =>
+        {
+          //alert("diddle4");
+          search(window._extendedPattern, diddle4, 1, 1);
+          window.setTimeout(checkMidiPermission, 1000);
+        }, 500);
+      }, 500);
+    }, 500);
+  }, 500);
+}, 500);
         </script>
     </body>
 </html>
