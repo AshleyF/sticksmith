@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>MIDI Monitor</title>
+    </head>
+    <body>
+  <h1>MIDI Monitor</h1>
+  <div id="debug"></div>
+  <canvas id="patternCanvas" width="900" height="240" style="border:1px solid #ddd; display:block; margin-top:6px"></canvas>
+        <script>
+// Match buffer for incoming MIDI notes (last 10 seconds)
+window._matchOrigin = performance.now();
+window._matchBuffer = [];
+const MATCH_WINDOW = 5000;
+
+function addMatchNoteAt(nowTimeMs, velocity) {
+  const t = nowTimeMs - window._matchOrigin;
+  window._matchBuffer.push({ time: t, velocity: Number(velocity || 0), sticking: '' });
+  // prune old notes
+  // Use a dynamic match window based on the extended pattern length
+  const patternLength = window._extendedPattern[window._extendedPattern.length - 1].time - window._extendedPattern[0].time;
+  const cutoff = t - patternLength;
+  while (window._matchBuffer.length && window._matchBuffer[0].time < cutoff) {
+    window._matchBuffer.shift();
+  }
+  // debug
+  console.log('Match buffer: ' + window._matchBuffer.length + ' events');
+  // prepare a normalized copy of the match buffer that starts at time=0
+  if (window._matchBuffer.length > 0) {
+    const firstTime = window._matchBuffer[0].time;
+    const normalized = window._matchBuffer.map((m) => ({ time: m.time - firstTime, velocity: m.velocity, sticking: m.sticking }));
+    // call search using the same pattern setup used elsewhere, with normalized times
+    try {
+      console.log('Calling search with normalized match buffer (' + normalized.length + ' events)');
+      search(window._extendedPattern, normalized, 0.1, 0.0);
+    } catch (err) {
+      console.error('Search failed:', err);
+    }
+  }
+}
+
+function handleInputsAndOutputs(midiAccess) {
+  console.log("Listing MIDI inputs and outputs:");
+  for (const entry of midiAccess.inputs) {
+    const input = entry[1];
+    console.log(
+      `Input port [type:'${input.type}']` +
+        ` id:'${input.id}'` +
+        ` manufacturer:'${input.manufacturer}'` +
+        ` name:'${input.name}'` +
+        ` version:'${input.version}'`,
+    );
+  }
+
+  for (const entry of midiAccess.outputs) {
+    const output = entry[1];
+    console.log(
+      `Output port [type:'${output.type}'] id:'${output.id}' manufacturer:'${output.manufacturer}' name:'${output.name}' version:'${output.version}'`,
+    );
+  }
+
+  function onMIDIMessage(event) {
+    let str = `MIDI message received at timestamp ${event.timeStamp}[${event.data.length} bytes]: `;
+    for (const character of event.data) {
+      str += `0x${character.toString(16)} `;
+    }
+    console.log(str);
+
+    // Parse and console.log human-friendly info for common MIDI messages
+    try {
+      const data = event.data;
+      if (data && data.length >= 1) {
+        const status = data[0];
+        const cmd = status & 0xf0;
+        const channel = status & 0x0f;
+        let type = 'unknown';
+        if (cmd === 0x80) type = 'noteoff';
+        else if (cmd === 0x90) type = 'noteon';
+        else if (cmd === 0xa0) type = 'poly aftertouch';
+        else if (cmd === 0xb0) type = 'controlchange';
+        else if (cmd === 0xc0) type = 'programchange';
+        else if (cmd === 0xd0) type = 'channel aftertouch';
+        else if (cmd === 0xe0) type = 'pitchbend';
+
+        function noteName(n) {
+          const names = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+          return names[n % 12] + Math.floor(n / 12) - 1;
+        }
+
+        if (type === 'noteon' || type === 'noteoff') {
+          const note = data[1];
+          const velocity = data[2];
+          console.log(`MIDI parsed: ${type} ch=${channel+1} note=${note} (${noteName(note)}) velocity=${velocity}`);
+        } else if (type === 'controlchange') {
+          console.log(`MIDI parsed: controlchange ch=${channel+1} controller=${data[1]} value=${data[2]}`);
+        } else if (type === 'programchange') {
+          console.log(`MIDI parsed: programchange ch=${channel+1} program=${data[1]}`);
+        } else {
+          // generic dump for other messages
+          console.log(`MIDI parsed: cmd=0x${cmd.toString(16)} ch=${channel+1} raw=[${Array.from(data).join(',')}]`);
+        }
+      }
+    } catch (e) {
+      console.error('Error parsing MIDI message', e);
+    }
+
+    // Parse Note On messages and add to the running match buffer.
+    try {
+      const data = event.data;
+      if (data && data.length >= 3) {
+        const status = data[0];
+        const data1 = data[1];
+        const data2 = data[2];
+        const cmd = status & 0xf0;
+        // 0x90 = Note On; treat velocity 0 as Note Off
+        if (cmd === 0x90 && data2 > 0) {
+          // Use performance.now() for timing accuracy
+          addMatchNoteAt(performance.now(), data2);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to parse MIDI message', e);
+    }
+  }
+
+  function startLoggingMIDIInput(midiAccess) {
+    // midiAccess.inputs is an iterable of [id, input] entries
+    midiAccess.inputs.forEach((entry) => {
+      const input = entry[1] || entry;
+      if (typeof input.onmidimessage !== 'undefined') {
+        input.onmidimessage = onMIDIMessage;
+        console.log('Attached onmidimessage to input:', input.id || input.name || input);
+      }
+    });
+
+    // Also listen for device connect/disconnect events
+    if (typeof midiAccess.onstatechange === 'undefined') {
+      midiAccess.onstatechange = (e) => {
+        console.log('MIDI device state changed', e);
+      };
+    }
+  }
+
+  // Attach handlers for current inputs immediately
+  startLoggingMIDIInput(midiAccess);
+}
+
+async function requestMidiAccess()
+{
+  console.log("Requesting MIDI access...");
+  if (typeof navigator.requestMIDIAccess === "function") {
+    try {
+      const access = await navigator.requestMIDIAccess({ sysex: true });
+      console.log("navigator.requestMIDIAccess succeeded.");
+      // You could inspect access.inputs/outputs here if needed.
+      handleInputsAndOutputs(access);
+    } catch (err) {
+      console.log("requestMIDIAccess failed: " + (err && err.message ? err.message : String(err)));
+    }
+  } else {
+    console.log("Web MIDI API (navigator.requestMIDIAccess) is not available in this browser.");
+  }
+}
+
+// Use an async IIFE so we can await feature checks and API calls.
+(async function checkMidiPermission() {
+  // If Permissions API or its query method isn't present, fall back.
+  const hasPermissionsAPI = !!navigator.permissions && typeof navigator.permissions.query === "function";
+
+  if (hasPermissionsAPI) {
+    try {
+      // Some browsers (notably some WebKit builds) will reject or throw when
+      // asked about non-supported permission names (like 'midi' with sysex).
+      const result = await navigator.permissions.query({ name: "midi", sysex: true });
+      console.log("Permissions.query succeeded.");
+      if (result.state === "granted") {
+        console.log("MIDI access granted.");
+        await requestMidiAccess();
+      } else if (result.state === "prompt") {
+        console.log("MIDI access will prompt for permission.");
+        await requestMidiAccess();
+      } else {
+        console.log("MIDI access denied.");
+      }
+      return;
+    } catch (err) {
+      // Catch NotSupportedError and other failures from Permissions.query.
+      console.log("Permissions.query failed: " + (err && err.message ? err.message : String(err)));
+      // Fall through to try requestMIDIAccess as a fallback.
+    }
+  } else {
+    console.log("Permissions API/query not available in this browser.");
+  }
+})();
+
+var paradiddle = [
+  { time:    0, velocity: 'A', sticking: 'R' },
+  { time:  200, velocity: ' ', sticking: 'L' },
+  { time:  400, velocity: ' ', sticking: 'R' },
+  { time:  600, velocity: ' ', sticking: 'R' },
+  { time:  800, velocity: 'A', sticking: 'L' },
+  { time: 1000, velocity: ' ', sticking: 'R' },
+  { time: 1200, velocity: ' ', sticking: 'L' },
+  { time: 1400, velocity: ' ', sticking: 'L' }
+];
+
+var diddle0 = [
+  { time:    0, velocity: 170, sticking: 'R' },
+  { time:  100, velocity: 100, sticking: 'L' },
+  { time:  200, velocity: 100, sticking: 'R' },
+  { time:  300, velocity: 100, sticking: 'R' }
+]
+
+function extend(gap, pattern) {
+  var extended = [];
+  var lastTime = pattern[pattern.length - 1].time;
+  gap = gap || 0; // default to 0 if not provided
+  var period = lastTime + gap; // pattern period including gap
+  // Extend 2 times in the past and 2 times in the future (4x total)
+  // All 8 notes from each cycle (the gap prevents time collisions at boundaries)
+  for (var i = -2; i < 2; i++) {
+    for (var j = 0; j < pattern.length; j++) {
+      var p = pattern[j];
+      extended.push({
+        time: p.time + (i * period),
+        velocity: p.velocity,
+        sticking: p.sticking
+      });
+    }
+  }
+  return extended;
+}
+
+function score(pattern, match, velocityWeight, stickingWeight) {
+  function square(x) { return x * x; }
+  var s = 0;
+  var c = 0;
+  var alreadyMatched = [];
+  var start = pattern[0].time; // pattern start
+  var end = match[match.length - 1].time;
+  for (var i = 0; i < match.length; i++) {
+    var m = match[i];
+    if (end - m.time > 3000) {
+      break;
+    }
+    var p = null;
+    var pj = Number.MIN_VALUE;
+    var d = Number.MAX_VALUE;
+    for (var j = 0; j < pattern.length; j++) {
+      var pp = pattern[j];
+      var dd = square(pp.time - m.time);
+      if (dd < d) {
+        const stickingPenalty = (m.sticking === '' || pp.sticking == m.sticking) ? 0 : stickingWeight;
+        d = dd + (square(pp.velocity - m.velocity) * velocityWeight) + stickingPenalty;
+        if (alreadyMatched[j]) {
+          d += 1000; // penalize matching the same pattern note repeatedly
+        }
+        p = pp;
+        pj = j;
+      }
+    }
+    alreadyMatched[pj] = true;
+    // Weight by exponential growth: notes closer to pattern start have near-zero weight,
+    // notes toward the end have higher weight. Uses (1 - exp(-t)) to approach 1 asymptotically
+    var timeFromStart = m.time - start;
+    var weight = 1 - Math.exp(-timeFromStart / 2000); // approaches 1 as time increases
+    s += d * weight;
+    c++;
+  }
+  return Math.sqrt(s / c);
+}
+
+function scaleTime(pattern, factor) { // assumes 0 origin time
+  var scaled = [];
+  for (var i = 0; i < pattern.length; i++) {
+    var p = pattern[i];
+    scaled.push({
+      time: p.time * factor,
+      velocity: p.velocity,
+      sticking: p.sticking
+    });
+  }
+  return scaled;
+}
+
+function setVelocity(pattern, normal, accent, ghost) {
+  var scaled = [];
+  for (var i = 0; i < pattern.length; i++) {
+    var p = pattern[i];
+    scaled.push({
+      time: p.time,
+      velocity: p.velocity == 'A' ? accent : (p.velocity == 'G' ? ghost : normal),
+      sticking: p.sticking
+    });
+  }
+  return scaled;
+}
+
+function translateTime(pattern, offset) {
+  var translated = [];
+  for (var i = 0; i < pattern.length; i++) {
+    var p = pattern[i];
+    translated.push({
+      time: p.time + offset,
+      velocity: p.velocity,
+      sticking: p.sticking
+    });
+  }
+  return translated;
+}
+
+// Render a pattern (background) and a match (overlay) on the canvas.
+// pattern: array of {time, velocity, ...}
+// match: array of {time, velocity, ...}
+// scale: multiplicative time scale applied to match
+// translate: time offset (ms) applied to match after scaling
+function renderPatternMatch(pattern, match, scale, translate) {
+  const canvas = document.getElementById('patternCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width;
+  const H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  if (!pattern || !pattern.length) return;
+  
+  console.log('renderPatternMatch: ' + pattern.length + ' pattern notes, ' + (match ? match.length : 0) + ' match notes');
+
+  const padding = 10;
+  // Render the full extended pattern
+  let renderPattern = pattern;
+
+  const patTimes = renderPattern.map((p) => Number(p.time));
+  let minTime = Math.min.apply(null, patTimes);
+  let maxTime = Math.max.apply(null, patTimes);
+  
+  // If match is provided (already scaled and translated), include its bounds
+  if (match && match.length) {
+    const matchTimes = match.map((m) => Number(m.time));
+    const matchMin = Math.min.apply(null, matchTimes);
+    const matchMax = Math.max.apply(null, matchTimes);
+    minTime = Math.min(minTime, matchMin);
+    maxTime = Math.max(maxTime, matchMax);
+  }
+  const timeRange = Math.max(1, maxTime - minTime);
+
+  const mapX = (t) => padding + ((t - minTime) / timeRange) * (W - padding * 2);
+
+  // Layout vertically into two bands (pattern top, match bottom).
+  const available = H - padding * 2;
+  const bandHeight = available / 2;
+  const patternBaseline = padding + bandHeight; // bottom of top band
+  // Reserve a small label area under the match band so labels can be drawn
+  // below the match bars without overlapping the canvas edge.
+  const labelHeight = 14; // px (approx for 12px font)
+  const labelMargin = 6; // px gap between bar and label
+  const matchBaseline = padding + bandHeight * 2 - (labelHeight + labelMargin); // lifted so labels fit below
+
+  // velocity -> bar height (clamped to band height so bars never go off-canvas)
+  const velValues = renderPattern.map((p) => Number(p.velocity || 0)).concat((match || []).map((m) => Number(m.velocity || 0)));
+  const maxVel = Math.max(1, Math.max.apply(null, velValues));
+  const velToHeight = (v) => {
+    const norm = Math.max(0, Math.min(127, Number(v || 0))) / Math.max(1, maxVel);
+    return norm * (bandHeight * 0.8); // leave a small margin inside each band
+  };
+
+  // Draw pattern bars (background) on the top band
+  ctx.textAlign = 'center';
+  ctx.font = '12px sans-serif';
+  // Now renderPattern only contains the middle cycle (8 notes), so show all sticking labels
+  for (let i = 0; i < renderPattern.length; i++) {
+    const p = renderPattern[i];
+    const x = mapX(p.time);
+    const h = velToHeight(p.velocity);
+    // gray bar for pattern (ensure it stays in the top band)
+    ctx.fillStyle = '#cccccc';
+    ctx.fillRect(x - 3, patternBaseline - h, 6, h);
+    // sticking label aligned to the top of the top band
+    if (p.sticking) {
+      ctx.fillStyle = '#222';
+      ctx.textBaseline = 'top';
+      const labelY = padding + 2;
+      ctx.fillText(String(p.sticking), x, labelY);
+    }
+  }
+
+  // Draw match (already scaled + translated by search) on the bottom band
+  if (match && match.length) {
+    for (let i = 0; i < match.length; i++) {
+      const m = match[i];
+      const x = mapX(m.time);
+      const h = velToHeight(m.velocity);
+      // blue bar for match (ensure it stays in the bottom band)
+      ctx.fillStyle = 'rgba(30,144,255,0.85)'; // dodgerblue
+      ctx.fillRect(x - 3, matchBaseline - h, 6, h);
+      // sticking label for match (draw all labels)
+      if (m.sticking) {
+        // Draw the sticking label in blue and below the match bar.
+        ctx.fillStyle = '#1e90ff'; // dodgerblue
+        ctx.textBaseline = 'top';
+        const labelY = matchBaseline + 6; // a small offset below the bar bottom
+        ctx.fillText(String(m.sticking), x, labelY);
+      }
+    }
+
+    // Draw a faint line connecting match and pattern center to indicate offset/scale
+    ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+    ctx.beginPath();
+    ctx.moveTo(padding, H / 2);
+    ctx.lineTo(W - padding, H / 2);
+    ctx.stroke();
+  }
+
+  // (legend removed to keep the canvas area clean)
+}
+
+// Keep last render parameters (used to re-render after search without re-running it)
+window._lastRender = null;
+
+function search(pattern, match, velocityWeight, stickingWeight) {
+  // Use the pattern exactly as provided by the caller. Do not extend here to
+  // avoid duplicating repetitions when the caller already passed an extended pattern.
+  var pat = pattern;
+  
+  // Filter match to only include notes within the pattern's time range
+  var patMinTime = pat[0].time;
+  var patMaxTime = pat[pat.length - 1].time;
+  var filteredMatch = match.filter((m) => m.time >= patMinTime && m.time <= patMaxTime);
+  
+  // If no notes in range, use original match (searching will still work, just won't match)
+  if (filteredMatch.length === 0) {
+    filteredMatch = match;
+  }
+  
+  var best = Number.MAX_VALUE;
+  var bestScale = 1.0;
+  var bestTranslate = 0;
+  
+  // Get the last (most recent) match time for alignment strategy
+  var lastMatchTime = filteredMatch.length > 0 ? filteredMatch[filteredMatch.length - 1].time : 0;
+  
+  for (var st = 0.1; st <= 3.0; st += 0.1) {
+    // Explore translates so the most recent match note lands in the present cycle (around time 0-1400)
+    // Try centering on the middle of the present cycle first
+    var centerTranslate = -lastMatchTime + 700; // put last match note around middle of present cycle
+    var minTranslate = centerTranslate - 700; // allow to span from start to end of present cycle
+    var maxTranslate = centerTranslate + 700;
+    for (var tt = minTranslate; tt <= maxTranslate; tt += 10 * st) {
+      var scaledTime = scaleTime(filteredMatch, st);
+      var translatedTime = translateTime(scaledTime, tt);
+      var s = score(pat, translatedTime, 0, 0);
+      //var s = score(pat, translatedTime, velocityWeight, stickingWeight);
+      //console.log("Score: " + s + " scale: " + st + " translate: " + tt + " (" + s + ")");
+      if (s < best) {
+        best = s;
+        bestScale = st;
+        bestTranslate = tt;
+        //console.log("Best score: " + best + " scale: " + st + " translate: " + tt + " (" + s + ")");
+      }
+    }
+  }
+  // After searching, record the result and render the pattern and the best-matching transformed match on the canvas
+  try {
+    // Transform the match using the best scale/translate found
+    const scaledMatch = scaleTime(match, bestScale);
+    const transformedMatch = translateTime(scaledMatch, bestTranslate);
+    console.log('Best match found: scale=' + bestScale + ', translate=' + bestTranslate);
+    console.log('  Transformed match times: ' + transformedMatch.map((m) => m.time.toFixed(0)).join(', '));
+    // store last render state for interactive resizing
+    window._lastRender = { pat: pat, match: transformedMatch, scale: bestScale, translate: bestTranslate };
+    // Pass the already-transformed match to render (no scale/translate parameters needed)
+    renderPatternMatch(pat, transformedMatch, 1.0, 0);
+  } catch (e) {
+    console.log('Rendering failed: ' + (e && e.message ? e.message : String(e)));
+  }
+}
+
+// Pre-compute the extended pattern once (after all functions are defined)
+window._extendedPattern = extend(200, setVelocity(paradiddle, 64, 127, 32));
+
+search(window._extendedPattern, diddle0, 0.1, 0.0)
+        </script>
+    </body>
+</html>
