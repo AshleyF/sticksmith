@@ -15,10 +15,12 @@ window._matchBuffer = [];
 const MATCH_WINDOW = 3000;
 const SCORE_DECAY_MS = 3000; // time constant for exponential weight and pruning
 const MAX_MATCH_BEATS = 8; // limit match buffer to most recent beats
-const PENALTY_EXTRA_MISSED = 100000; // penalty per extra or missed beat
 const STICKING_MISMATCH_BASE = 50000; // base penalty multiplier for sticking mismatches
 const NOTE_AGE_CUTOFF_MS = 3000; // discard notes older than this relative to end
 const TOP_CANDIDATES = 10; // number of best candidates to keep
+const PROGRESS_PENALTY = 20; // penalty if latest note does not advance to expected pattern beat
+const DISQUALIFIED_SCORE = 1e12; // large finite score used when extras/misses occur
+const TEST_TIMEOUT = 1000;
 
 function addMatchNoteAt(nowTimeMs, velocity, sticking) {
   const t = nowTimeMs - window._matchOrigin;
@@ -73,6 +75,9 @@ window.addEventListener('keydown', (evt) => {
     addMatchNoteAt(now, 32, 'L');
   } else if (key === 't') {
     addMatchNoteAt(now, 127, 'L');
+  } else if (key === ' ') {
+    // Spacebar: normal hit with no sticking label
+    addMatchNoteAt(now, 64, '');
   } else {
     return;
   }
@@ -282,6 +287,25 @@ var paradiddle = [
   { time:  7400, velocity: 'N', sticking: 'L' },
 ];
 
+// paradiddle = [
+  // { time:    0, velocity: 'N', sticking: 'L' },
+  // { time:  200, velocity: 'N', sticking: 'R' },
+  // { time:  400, velocity: 'N', sticking: 'L' },
+  // { time:  600, velocity: 'N', sticking: 'R' },
+  // { time:  800, velocity: 'N', sticking: 'L' },
+  // { time: 1000, velocity: 'N', sticking: 'R' },
+  // { time: 1200, velocity: 'N', sticking: 'L' },
+  // { time: 1400, velocity: 'N', sticking: 'R' },
+  // { time: 1600, velocity: 'N', sticking: 'L' },
+  // { time: 1800, velocity: 'N', sticking: 'R' },
+  // { time: 2000, velocity: 'N', sticking: 'L' },
+  // { time: 2200, velocity: 'N', sticking: 'R' },
+  // { time: 2400, velocity: 'N', sticking: 'L' },
+  // { time: 2600, velocity: 'N', sticking: 'R' },
+  // { time: 2800, velocity: 'N', sticking: 'L' },
+  // { time: 3000, velocity: 'N', sticking: 'R' },
+// ];
+
 var diddle0 = [
   // { time:    0, velocity: 170, sticking: 'R' },
   { time:    0, velocity: 100, sticking: 'L' },
@@ -325,7 +349,7 @@ function score(pattern, match, velocityWeight, stickingWeight) {
   // Discard match notes older than the decay window relative to the last note
   var recentCutoff = end - SCORE_DECAY_MS;
   var filtered = match.filter((m) => m.time >= recentCutoff);
-  if (!filtered.length) return { dynamics: Number.MAX_VALUE, timing: Number.MAX_VALUE };
+    if (!filtered.length) return { dynamics: Number.MAX_VALUE, timing: Number.MAX_VALUE, reuseCount: reuseCount, gapCount: gapCount, stickingCount: stickingCount };
   match = filtered;
   for (var i = 0; i < match.length; i++) {
     var m = match[i];
@@ -351,10 +375,8 @@ function score(pattern, match, velocityWeight, stickingWeight) {
         bestStickMismatch = stickingMismatch;
       }
     }
-    var reusePenalty = 0;
     if (pj >= 0 && alreadyMatched[pj]) {
-      // Strongly penalize reusing the same pattern beat for multiple match notes
-      reusePenalty = PENALTY_EXTRA_MISSED;
+      // Track reuse of the same pattern beat (extra hits)
       reuseCount++;
     }
     if (pj >= 0) {
@@ -365,7 +387,7 @@ function score(pattern, match, velocityWeight, stickingWeight) {
     // notes toward the end have higher weight. Uses (1 - exp(-t)) to approach 1 asymptotically
     var timeFromStart = m.time - start;
     var weight = 1 - Math.exp(-timeFromStart / SCORE_DECAY_MS); // approaches 1 as time increases
-    timing += (timeTerm + stickPenalty + reusePenalty) * weight;
+    timing += (timeTerm + stickPenalty) * weight;
     dynamics += velTerm * weight;
     c++;
   }
@@ -384,15 +406,31 @@ function score(pattern, match, velocityWeight, stickingWeight) {
       if (!alreadyMatched[k2]) gapUnmatched++;
     }
     if (gapUnmatched > 0) {
-      timing += gapUnmatched * PENALTY_EXTRA_MISSED; // penalty per skipped beat inside the matched window (same as reuse)
+      // Track unmatched beats within the matched window (misses)
       gapCount += gapUnmatched;
     }
   }
   if (c === 0) return { dynamics: Number.MAX_VALUE, timing: Number.MAX_VALUE, reuseCount: reuseCount, gapCount: gapCount, stickingCount: stickingCount };
+
   var norm = c;
+  var baseDynamics = Math.sqrt(dynamics / norm);
+  var baseTiming = Math.sqrt(timing / norm);
+
+  if (reuseCount > 0 || gapCount > 0) {
+    // Drastically inflate timing so penalized candidates sort last
+    const penalty = DISQUALIFIED_SCORE + (reuseCount + gapCount) * 1e10;
+    return {
+      dynamics: baseDynamics,
+      timing: baseTiming + penalty,
+      reuseCount: reuseCount,
+      gapCount: gapCount,
+      stickingCount: stickingCount
+    };
+  }
+
   return {
-    dynamics: Math.sqrt(dynamics / norm),
-    timing: Math.sqrt(timing / norm),
+    dynamics: baseDynamics,
+    timing: baseTiming,
     reuseCount: reuseCount,
     gapCount: gapCount,
     stickingCount: stickingCount
@@ -523,13 +561,14 @@ function renderPatternMatch(pattern, match, scale, translate) {
   // Draw pattern bars (background) on the top band
   ctx.textAlign = 'center';
   ctx.font = '12px sans-serif';
+  const highlightIdx = (typeof window._lastMatchedPatternIdx === 'number') ? window._lastMatchedPatternIdx : -1;
   // Render all sticking labels across the extended pattern
   for (let i = 0; i < renderPattern.length; i++) {
     const p = renderPattern[i];
     const x = mapX(p.time);
     const h = velToHeight(p.velocity);
     // gray bar for pattern (ensure it stays in the top band)
-    ctx.fillStyle = '#cccccc';
+    ctx.fillStyle = (i === highlightIdx) ? '#ff4d4d' : '#cccccc';
     ctx.fillRect(x - halfBar, patternBaseline - h, barWidth, h);
     // sticking label aligned to the top of the top band
     if (p.sticking) {
@@ -572,6 +611,8 @@ function renderPatternMatch(pattern, match, scale, translate) {
 
 // Keep last render parameters (used to re-render after search without re-running it)
 window._lastRender = null;
+// Track last matched pattern index for progress heuristic
+window._lastMatchedPatternIdx = null;
 
 function oldsearch(pattern, match, velocityWeight, stickingWeight) {
   if (!match || !match.length) return;
@@ -657,6 +698,21 @@ function search(pattern, match, velocityWeight, stickingWeight) {
   const denomEps = 1e-6;
   const topN = TOP_CANDIDATES;
 
+  function mapLatestMatchToPattern(transformedMatch, patArr) {
+    if (!transformedMatch.length) return -1;
+    const last = transformedMatch[transformedMatch.length - 1];
+    let bestIdx = -1;
+    let bestDist = Number.MAX_VALUE;
+    for (let i = 0; i < patArr.length; i++) {
+      const dist = Math.abs(patArr[i].time - last.time);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestIdx = i;
+      }
+    }
+    return bestIdx;
+  }
+
   for (let pi = 0; pi < pat.length; pi++) {
     const p0 = pat[pi];
     const p1 = pat[pi + 1];
@@ -682,9 +738,17 @@ function search(pattern, match, velocityWeight, stickingWeight) {
       const timeTranslated = translateTime(scaledTimeMatch, translate);
       const scaledVelMatch = scaleVelocity(timeTranslated, vscale);
       const sc = score(pat, scaledVelMatch, velocityWeight, stickingWeight);
-      if (Number.isFinite(sc.dynamics) && Number.isFinite(sc.timing)) {
+      if (Number.isFinite(sc.dynamics) && Number.isFinite(sc.timing) && sc.dynamics !== Number.MAX_VALUE && sc.timing !== Number.MAX_VALUE) {
         const combined = Math.sqrt(sc.dynamics * sc.dynamics + sc.timing * sc.timing);
-        candidates.push({ score: combined, dynamics: sc.dynamics, timing: sc.timing, reuseCount: sc.reuseCount, gapCount: sc.gapCount, stickingCount: sc.stickingCount, scale, translate, vscale, match: scaledVelMatch });
+        let finalScore = combined;
+        const latestIdx = mapLatestMatchToPattern(timeTranslated, pat);
+        if (window._lastMatchedPatternIdx !== null && latestIdx >= 0) {
+          const expected = window._lastMatchedPatternIdx + 1;
+          if (latestIdx !== expected) {
+            finalScore += PROGRESS_PENALTY;
+          }
+        }
+        candidates.push({ score: finalScore, dynamics: sc.dynamics, timing: sc.timing, reuseCount: sc.reuseCount, gapCount: sc.gapCount, stickingCount: sc.stickingCount, latestIdx, scale, translate, vscale, match: scaledVelMatch });
       }
     }
   }
@@ -709,6 +773,9 @@ function search(pattern, match, velocityWeight, stickingWeight) {
     console.log('  Counts -> extra beats: ' + (best.reuseCount || 0) + ', missed beats: ' + (best.gapCount || 0) + ', sticking: ' + (best.stickingCount || 0));
     console.log('  Transformed match times: ' + best.match.map((m) => m.time.toFixed(0)).join(', '));
     window._lastRender = { pat: pat, match: best.match, scale: best.scale, translate: best.translate, vscale: best.vscale };
+    if (best.latestIdx !== undefined && best.latestIdx >= 0) {
+      window._lastMatchedPatternIdx = best.latestIdx;
+    }
     renderPatternMatch(pat, best.match, 1.0, 0);
     const dbg = document.getElementById('debug');
     if (dbg) {
@@ -722,6 +789,9 @@ function search(pattern, match, velocityWeight, stickingWeight) {
 // Use the manually extended pattern as-is
 window._extendedPattern = paradiddle;
 
+search(window._extendedPattern, diddle4, 1, 1);
+checkMidiPermission();
+/*
 window.setTimeout(() =>
 {
   // alert("diddle0");
@@ -742,12 +812,13 @@ window.setTimeout(() =>
         {
           //alert("diddle4");
           search(window._extendedPattern, diddle4, 1, 1);
-          window.setTimeout(checkMidiPermission, 300);
-        }, 300);
-      }, 300);
-    }, 300);
-  }, 300);
-}, 300);
+          window.setTimeout(checkMidiPermission, TEST_TIMEOUT);
+        }, TEST_TIMEOUT);
+      }, TEST_TIMEOUT);
+    }, TEST_TIMEOUT);
+  }, TEST_TIMEOUT);
+}, TEST_TIMEOUT);
+// */
         </script>
     </body>
 </html>
