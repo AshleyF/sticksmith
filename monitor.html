@@ -7,12 +7,18 @@
     <body>
   <h1>MIDI Monitor</h1>
   <div id="debug"></div>
-  <canvas id="patternCanvas" width="900" height="240" style="border:1px solid #ddd; display:block; margin-top:6px"></canvas>
+  <canvas id="patternCanvas" width="1125" height="300" style="border:1px solid #ddd; display:block; margin-top:6px"></canvas>
         <script>
 // Match buffer for incoming MIDI notes (last 10 seconds)
 window._matchOrigin = performance.now();
 window._matchBuffer = [];
 const MATCH_WINDOW = 3000;
+const SCORE_DECAY_MS = 3000; // time constant for exponential weight and pruning
+const MAX_MATCH_BEATS = 8; // limit match buffer to most recent beats
+const PENALTY_EXTRA_MISSED = 100000; // penalty per extra or missed beat
+const STICKING_MISMATCH_BASE = 50000; // base penalty multiplier for sticking mismatches
+const NOTE_AGE_CUTOFF_MS = 3000; // discard notes older than this relative to end
+const TOP_CANDIDATES = 10; // number of best candidates to keep
 
 function addMatchNoteAt(nowTimeMs, velocity, sticking) {
   const t = nowTimeMs - window._matchOrigin;
@@ -22,6 +28,15 @@ function addMatchNoteAt(nowTimeMs, velocity, sticking) {
   const patternLength = window._extendedPattern[window._extendedPattern.length - 1].time - window._extendedPattern[0].time;
   const cutoff = t - patternLength;
   while (window._matchBuffer.length && window._matchBuffer[0].time < cutoff) {
+    window._matchBuffer.shift();
+  }
+  // Also prune anything older than the scoring decay window
+  const decayCutoff = t - SCORE_DECAY_MS;
+  while (window._matchBuffer.length && window._matchBuffer[0].time < decayCutoff) {
+    window._matchBuffer.shift();
+  }
+  // Keep only the most recent MAX_MATCH_BEATS events
+  while (window._matchBuffer.length > MAX_MATCH_BEATS) {
     window._matchBuffer.shift();
   }
   // debug
@@ -237,6 +252,34 @@ var paradiddle = [
   { time:  2600, velocity: 'N', sticking: 'R' },
   { time:  2800, velocity: 'N', sticking: 'L' },
   { time:  3000, velocity: 'N', sticking: 'L' },
+  // drag
+  { time:  4000, velocity: 'N', sticking: 'L' },
+  { time:  4100, velocity: 'N', sticking: 'L' },
+  { time:  4200, velocity: 'A', sticking: 'R' },
+  { time:  4400, velocity: 'N', sticking: 'R' },
+  { time:  4500, velocity: 'N', sticking: 'R' },
+  { time:  4600, velocity: 'A', sticking: 'L' },
+  // second cycle
+  { time:  4800, velocity: 'N', sticking: 'L' },
+  { time:  4900, velocity: 'N', sticking: 'L' },
+  { time:  5000, velocity: 'A', sticking: 'R' },
+  { time:  5200, velocity: 'N', sticking: 'R' },
+  { time:  5300, velocity: 'N', sticking: 'R' },
+  { time:  5400, velocity: 'A', sticking: 'L' },
+  // flam tap
+  { time:  6000, velocity: 'A', sticking: 'R' },
+  { time:  6030, velocity: 'A', sticking: 'L' },
+  { time:  6200, velocity: 'N', sticking: 'R' },
+  { time:  6400, velocity: 'A', sticking: 'L' },
+  { time:  6430, velocity: 'A', sticking: 'R' },
+  { time:  6600, velocity: 'N', sticking: 'L' },
+  // second cycle
+  { time:  6800, velocity: 'A', sticking: 'R' },
+  { time:  6830, velocity: 'A', sticking: 'L' },
+  { time:  7000, velocity: 'N', sticking: 'R' },
+  { time:  7200, velocity: 'A', sticking: 'L' },
+  { time:  7230, velocity: 'A', sticking: 'R' },
+  { time:  7400, velocity: 'N', sticking: 'L' },
 ];
 
 var diddle0 = [
@@ -270,41 +313,60 @@ diddle4 = [
 
 function score(pattern, match, velocityWeight, stickingWeight) {
   function square(x) { return x * x; }
-  var s = 0;
+  var dynamics = 0; // velocity matching
+  var timing = 0; // timing + penalties
+  var reuseCount = 0;
+  var gapCount = 0;
+  var stickingCount = 0;
   var c = 0;
   var alreadyMatched = [];
   var start = pattern[0].time; // pattern start
   var end = match[match.length - 1].time;
+  // Discard match notes older than the decay window relative to the last note
+  var recentCutoff = end - SCORE_DECAY_MS;
+  var filtered = match.filter((m) => m.time >= recentCutoff);
+  if (!filtered.length) return { dynamics: Number.MAX_VALUE, timing: Number.MAX_VALUE };
+  match = filtered;
   for (var i = 0; i < match.length; i++) {
     var m = match[i];
-    if (end - m.time > 3000) {
+    if (end - m.time > NOTE_AGE_CUTOFF_MS) {
       break;
     }
-    var p = null;
     var d = Number.MAX_VALUE;
     var pj = -1;
+    var timeTerm = 0;
+    var velTerm = 0;
+    var stickPenalty = 0;
+    var bestStickMismatch = 0;
     for (var j = 0; j < pattern.length; j++) {
       var pp = pattern[j];
       var dd = square(pp.time - m.time);
       if (dd < d) {
-        const stickingPenalty = (m.sticking === '' || pp.sticking == m.sticking) ? 0 : stickingWeight * 1000;
-        d = dd + (square(pp.velocity - m.velocity) * velocityWeight) + stickingPenalty;
-        p = pp;
+        const stickingMismatch = (m.sticking === '' || pp.sticking == m.sticking) ? 0 : 1;
+        stickPenalty = stickingMismatch ? (stickingWeight * STICKING_MISMATCH_BASE) : 0;
+        timeTerm = dd;
+        velTerm = square(pp.velocity - m.velocity) * velocityWeight;
+        d = dd + velTerm + stickPenalty;
         pj = j;
+        bestStickMismatch = stickingMismatch;
       }
     }
+    var reusePenalty = 0;
     if (pj >= 0 && alreadyMatched[pj]) {
       // Strongly penalize reusing the same pattern beat for multiple match notes
-      d += 10000;
+      reusePenalty = PENALTY_EXTRA_MISSED;
+      reuseCount++;
     }
     if (pj >= 0) {
       alreadyMatched[pj] = true;
+      stickingCount += bestStickMismatch;
     }
     // Weight by exponential growth: notes closer to pattern start have near-zero weight,
     // notes toward the end have higher weight. Uses (1 - exp(-t)) to approach 1 asymptotically
     var timeFromStart = m.time - start;
-    var weight = 1 - Math.exp(-timeFromStart / 3000); // approaches 1 as time increases
-    s += d * weight;
+    var weight = 1 - Math.exp(-timeFromStart / SCORE_DECAY_MS); // approaches 1 as time increases
+    timing += (timeTerm + stickPenalty + reusePenalty) * weight;
+    dynamics += velTerm * weight;
     c++;
   }
   // Penalize gaps: pattern beats between the first and last matched beat that remain unmatched
@@ -322,10 +384,19 @@ function score(pattern, match, velocityWeight, stickingWeight) {
       if (!alreadyMatched[k2]) gapUnmatched++;
     }
     if (gapUnmatched > 0) {
-      s += gapUnmatched * 5000; // penalty per skipped beat inside the matched window
+      timing += gapUnmatched * PENALTY_EXTRA_MISSED; // penalty per skipped beat inside the matched window (same as reuse)
+      gapCount += gapUnmatched;
     }
   }
-  return Math.sqrt(s / c);
+  if (c === 0) return { dynamics: Number.MAX_VALUE, timing: Number.MAX_VALUE, reuseCount: reuseCount, gapCount: gapCount, stickingCount: stickingCount };
+  var norm = c;
+  return {
+    dynamics: Math.sqrt(dynamics / norm),
+    timing: Math.sqrt(timing / norm),
+    reuseCount: reuseCount,
+    gapCount: gapCount,
+    stickingCount: stickingCount
+  };
 }
 
 function scaleTime(pattern, factor) { // assumes 0 origin time
@@ -341,12 +412,48 @@ function scaleTime(pattern, factor) { // assumes 0 origin time
   return scaled;
 }
 
+function scaleVelocity(pattern, factor, vmin = 32, vmax = 127) {
+  var scaled = [];
+  for (var i = 0; i < pattern.length; i++) {
+    var p = pattern[i];
+    var v = Number(p.velocity || 0) * factor;
+    v = Math.max(vmin, Math.min(vmax, v));
+    scaled.push({
+      time: p.time,
+      velocity: v,
+      sticking: p.sticking
+    });
+  }
+  return scaled;
+}
+
 function toNumericVelocity(v) {
   if (typeof v === 'number') return v;
   if (v === 'A') return 127;
   if (v === 'G') return 32;
   // treat N, space, empty, undefined as normal
   return 64;
+}
+
+function trimMatchAfterLargeGap(match) {
+  if (!match || match.length < 3) return match;
+  const gaps = [];
+  for (let i = 0; i < match.length - 1; i++) {
+    const gap = match[i + 1].time - match[i].time;
+    if (gap > 0) gaps.push(gap);
+  }
+  if (gaps.length < 2) return match;
+  const mean = gaps.reduce((s, g) => s + g, 0) / gaps.length;
+  const variance = gaps.reduce((s, g) => s + Math.pow(g - mean, 2), 0) / gaps.length;
+  const sd = Math.sqrt(variance);
+  const threshold = mean + 2 * sd; // heuristic: keep if gap is within two std devs
+  for (let i = 0; i < match.length - 1; i++) {
+    const gap = match[i + 1].time - match[i].time;
+    if (gap > threshold) {
+      return match.slice(i + 1); // drop everything before the large gap
+    }
+  }
+  return match;
 }
 
 function translateTime(pattern, offset) {
@@ -386,8 +493,10 @@ function renderPatternMatch(pattern, match, scale, translate) {
   let renderPattern = pattern;
 
   const patTimes = renderPattern.map((p) => Number(p.time));
-  let minTime = Math.min.apply(null, patTimes);
-  let maxTime = Math.max.apply(null, patTimes);
+  const matchTimes = (match || []).map((m) => Number(m.time));
+  const allTimes = patTimes.concat(matchTimes.length ? matchTimes : [patTimes[0], patTimes[patTimes.length - 1]]);
+  let minTime = Math.min.apply(null, allTimes);
+  let maxTime = Math.max.apply(null, allTimes);
   const timeRange = Math.max(1, maxTime - minTime);
 
   const leftPad = padding + halfBar;
@@ -405,11 +514,9 @@ function renderPatternMatch(pattern, match, scale, translate) {
   const labelMargin = 6; // px gap between bar and label
   const matchBaseline = padding + bandHeight * 2 - (labelHeight + labelMargin); // lifted so labels fit below
 
-  // velocity -> bar height (clamped to band height so bars never go off-canvas)
-  const velValues = renderPattern.map((p) => toNumericVelocity(p.velocity)).concat((match || []).map((m) => toNumericVelocity(m.velocity)));
-  const maxVel = Math.max(1, Math.max.apply(null, velValues));
+  // velocity -> bar height using fixed MIDI scale (0..127), not relative to observed max
   const velToHeight = (v) => {
-    const norm = Math.max(0, Math.min(127, toNumericVelocity(v))) / Math.max(1, maxVel);
+    const norm = Math.max(0, Math.min(127, toNumericVelocity(v))) / 127;
     return norm * (bandHeight * 0.8); // leave a small margin inside each band
   };
 
@@ -466,7 +573,7 @@ function renderPatternMatch(pattern, match, scale, translate) {
 // Keep last render parameters (used to re-render after search without re-running it)
 window._lastRender = null;
 
-function search(pattern, match, velocityWeight, stickingWeight) {
+function oldsearch(pattern, match, velocityWeight, stickingWeight) {
   if (!match || !match.length) return;
   // Compute velocity stats from the incoming match
   const velocities = match.map((m) => Number(m.velocity || 0));
@@ -510,12 +617,13 @@ function search(pattern, match, velocityWeight, stickingWeight) {
       var scaledTime = scaleTime(filteredMatch, st);
       var translatedTime = translateTime(scaledTime, tt);
       var s = score(pat, translatedTime, velocityWeight, stickingWeight);
-      //console.log("Score: " + s + " scale: " + st + " translate: " + tt + " (" + s + ")");
-      if (s < best) {
-        best = s;
+      var combined = Math.sqrt(s.dynamics * s.dynamics + s.timing * s.timing);
+      //console.log("Score: " + combined + " scale: " + st + " translate: " + tt + " (" + combined + ")");
+      if (combined < best) {
+        best = combined;
         bestScale = st;
         bestTranslate = tt;
-        console.log("Best score: " + best + " scale: " + st + " translate: " + tt + " (" + s + ")");
+        console.log("Best score: " + best + " scale: " + st + " translate: " + tt + " (" + combined + ")");
       }
     }
   }
@@ -530,6 +638,82 @@ function search(pattern, match, velocityWeight, stickingWeight) {
     window._lastRender = { pat: pat, match: transformedMatch, scale: bestScale, translate: bestTranslate };
     // Pass the already-transformed match to render (no scale/translate parameters needed)
     renderPatternMatch(pat, transformedMatch, 1.0, 0);
+  } catch (e) {
+    console.log('Rendering failed: ' + (e && e.message ? e.message : String(e)));
+  }
+}
+
+function search(pattern, match, velocityWeight, stickingWeight) {
+  if (!match || !match.length) return;
+  const trimmed = trimMatchAfterLargeGap(match);
+  if (!trimmed || !trimmed.length) return;
+
+  // Use raw match velocities; only convert pattern velocities to numeric
+  const pat = pattern.map((p) => ({ time: p.time, velocity: toNumericVelocity(p.velocity), sticking: p.sticking }));
+  const workMatch = trimmed;
+  const t0 = performance.now();
+
+  const candidates = [];
+  const denomEps = 1e-6;
+  const topN = TOP_CANDIDATES;
+
+  for (let pi = 0; pi < pat.length; pi++) {
+    const p0 = pat[pi];
+    const p1 = pat[pi + 1];
+    if (!p1) continue; // require a next beat
+    for (let mi = 0; mi < workMatch.length; mi++) {
+      const m0 = workMatch[mi];
+      const m1 = workMatch[mi + 1];
+      if (!m1) continue; // require a next beat
+
+      const denom = (m1.time - m0.time);
+      if (Math.abs(denom) < denomEps) continue;
+
+      const scale = (p1.time - p0.time) / denom;
+      if (!isFinite(scale) || scale <= 0) continue;
+
+      const translate = p0.time - m0.time * scale;
+      if (translate < 0) continue; // do not explore negative translations
+      const scaledTimeMatch = scaleTime(workMatch, scale);
+      const mv0 = Number(m0.velocity || 0);
+      const pv0 = Number(p0.velocity || 0);
+      const vscale = mv0 > 0 ? (pv0 / mv0) : 1;
+      if (!isFinite(vscale) || vscale <= 0) continue;
+      const timeTranslated = translateTime(scaledTimeMatch, translate);
+      const scaledVelMatch = scaleVelocity(timeTranslated, vscale);
+      const sc = score(pat, scaledVelMatch, velocityWeight, stickingWeight);
+      if (Number.isFinite(sc.dynamics) && Number.isFinite(sc.timing)) {
+        const combined = Math.sqrt(sc.dynamics * sc.dynamics + sc.timing * sc.timing);
+        candidates.push({ score: combined, dynamics: sc.dynamics, timing: sc.timing, reuseCount: sc.reuseCount, gapCount: sc.gapCount, stickingCount: sc.stickingCount, scale, translate, vscale, match: scaledVelMatch });
+      }
+    }
+  }
+
+  if (!candidates.length) {
+    console.log('search: no candidates, took ' + (performance.now() - t0).toFixed(2) + ' ms');
+    const dbg = document.getElementById('debug');
+    if (dbg) dbg.textContent = 'No candidates (search ' + (performance.now() - t0).toFixed(2) + ' ms)';
+    return;
+  }
+
+  candidates.sort((a, b) => a.score - b.score);
+  const top = candidates.slice(0, topN);
+
+  // Store for later refinement
+  window._lastCandidates = top;
+
+  const best = top[0];
+  try {
+    console.log('Best match found: scale=' + best.scale + ', translate=' + best.translate + (best.vscale ? (', vscale=' + best.vscale) : '') + '; search took ' + (performance.now() - t0).toFixed(2) + ' ms');
+    console.log('  Component scores -> dynamics: ' + best.dynamics.toFixed(2) + ', timing: ' + best.timing.toFixed(2));
+    console.log('  Counts -> extra beats: ' + (best.reuseCount || 0) + ', missed beats: ' + (best.gapCount || 0) + ', sticking: ' + (best.stickingCount || 0));
+    console.log('  Transformed match times: ' + best.match.map((m) => m.time.toFixed(0)).join(', '));
+    window._lastRender = { pat: pat, match: best.match, scale: best.scale, translate: best.translate, vscale: best.vscale };
+    renderPatternMatch(pat, best.match, 1.0, 0);
+    const dbg = document.getElementById('debug');
+    if (dbg) {
+      dbg.textContent = 'Dynamics: ' + best.dynamics.toFixed(2) + ' | Timing: ' + best.timing.toFixed(2) + ' | Combined: ' + best.score.toFixed(2) + ' | Extra: ' + (best.reuseCount || 0) + ' | Missed: ' + (best.gapCount || 0) + ' | Sticking: ' + (best.stickingCount || 0) + ' | Scale: ' + best.scale.toFixed(3) + ' | Translate: ' + best.translate.toFixed(1) + (best.vscale ? (' | Vscale: ' + best.vscale.toFixed(3)) : '');
+    }
   } catch (e) {
     console.log('Rendering failed: ' + (e && e.message ? e.message : String(e)));
   }
@@ -558,12 +742,12 @@ window.setTimeout(() =>
         {
           //alert("diddle4");
           search(window._extendedPattern, diddle4, 1, 1);
-          window.setTimeout(checkMidiPermission, 1000);
-        }, 500);
-      }, 500);
-    }, 500);
-  }, 500);
-}, 500);
+          window.setTimeout(checkMidiPermission, 300);
+        }, 300);
+      }, 300);
+    }, 300);
+  }, 300);
+}, 300);
         </script>
     </body>
 </html>
