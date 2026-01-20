@@ -6,10 +6,11 @@
     </head>
     <body>
   <h1>MIDI Monitor</h1>
+  <label for="patternSelect">Pattern: </label>
+  <select id="patternSelect"></select>
   <div id="debug"></div>
   <canvas id="patternCanvas" width="1125" height="300" style="border:1px solid #ddd; display:block; margin-top:6px"></canvas>
         <script>
-// Match buffer for incoming MIDI notes (last 10 seconds)
 window._matchOrigin = performance.now();
 window._matchBuffer = [];
 const MATCH_WINDOW = 3000;
@@ -20,6 +21,7 @@ const NOTE_AGE_CUTOFF_MS = 3000; // discard notes older than this relative to en
 const TOP_CANDIDATES = 10; // number of best candidates to keep
 const PROGRESS_PENALTY = 20; // penalty if latest note does not advance to expected pattern beat
 const DISQUALIFIED_SCORE = 1e12; // large finite score used when extras/misses occur
+const FLAM_OFFSET_MS = 30; // spacing between notes in a flam
 const TEST_TIMEOUT = 1000;
 
 function addMatchNoteAt(nowTimeMs, velocity, sticking) {
@@ -50,7 +52,7 @@ function addMatchNoteAt(nowTimeMs, velocity, sticking) {
     // call search using the same pattern setup used elsewhere, with normalized times
     try {
       console.log('Calling search with normalized match buffer (' + normalized.length + ' events)');
-      search(window._extendedPattern, normalized, 1, 1);
+      searchAcrossPatterns(normalized, 1, 1);
     } catch (err) {
       console.error('Search failed:', err);
     }
@@ -208,7 +210,7 @@ async function requestMidiAccess()
 }
 
 // Use an async IIFE so we can await feature checks and API calls.
-async function checkMidiPermission() {
+async function startMIDI() {
   // If Permissions API or its query method isn't present, fall back.
   const hasPermissionsAPI = !!navigator.permissions && typeof navigator.permissions.query === "function";
 
@@ -237,74 +239,6 @@ async function checkMidiPermission() {
     console.log("Permissions API/query not available in this browser.");
   }
 }
-
-// Manually extended paradiddle (4 cycles: -2, -1, 0, 1) with symbolic velocities: 'A' (accent), 'G' (ghost), 'N'/' ' normal
-var paradiddle = [
-  { time:     0, velocity: 'A', sticking: 'R' },
-  { time:   200, velocity: 'N', sticking: 'L' },
-  { time:   400, velocity: 'N', sticking: 'R' },
-  { time:   600, velocity: 'N', sticking: 'R' },
-  { time:   800, velocity: 'A', sticking: 'L' },
-  { time:  1000, velocity: 'N', sticking: 'R' },
-  { time:  1200, velocity: 'N', sticking: 'L' },
-  { time:  1400, velocity: 'N', sticking: 'L' },
-  // second cycle
-  { time:  1600, velocity: 'A', sticking: 'R' },
-  { time:  1800, velocity: 'N', sticking: 'L' },
-  { time:  2000, velocity: 'N', sticking: 'R' },
-  { time:  2200, velocity: 'N', sticking: 'R' },
-  { time:  2400, velocity: 'A', sticking: 'L' },
-  { time:  2600, velocity: 'N', sticking: 'R' },
-  { time:  2800, velocity: 'N', sticking: 'L' },
-  { time:  3000, velocity: 'N', sticking: 'L' },
-  // drag
-  { time:  4000, velocity: 'N', sticking: 'L' },
-  { time:  4100, velocity: 'N', sticking: 'L' },
-  { time:  4200, velocity: 'A', sticking: 'R' },
-  { time:  4400, velocity: 'N', sticking: 'R' },
-  { time:  4500, velocity: 'N', sticking: 'R' },
-  { time:  4600, velocity: 'A', sticking: 'L' },
-  // second cycle
-  { time:  4800, velocity: 'N', sticking: 'L' },
-  { time:  4900, velocity: 'N', sticking: 'L' },
-  { time:  5000, velocity: 'A', sticking: 'R' },
-  { time:  5200, velocity: 'N', sticking: 'R' },
-  { time:  5300, velocity: 'N', sticking: 'R' },
-  { time:  5400, velocity: 'A', sticking: 'L' },
-  // flam tap
-  { time:  6000, velocity: 'A', sticking: 'R' },
-  { time:  6030, velocity: 'A', sticking: 'L' },
-  { time:  6200, velocity: 'N', sticking: 'R' },
-  { time:  6400, velocity: 'A', sticking: 'L' },
-  { time:  6430, velocity: 'A', sticking: 'R' },
-  { time:  6600, velocity: 'N', sticking: 'L' },
-  // second cycle
-  { time:  6800, velocity: 'A', sticking: 'R' },
-  { time:  6830, velocity: 'A', sticking: 'L' },
-  { time:  7000, velocity: 'N', sticking: 'R' },
-  { time:  7200, velocity: 'A', sticking: 'L' },
-  { time:  7230, velocity: 'A', sticking: 'R' },
-  { time:  7400, velocity: 'N', sticking: 'L' },
-];
-
-// paradiddle = [
-  // { time:    0, velocity: 'N', sticking: 'L' },
-  // { time:  200, velocity: 'N', sticking: 'R' },
-  // { time:  400, velocity: 'N', sticking: 'L' },
-  // { time:  600, velocity: 'N', sticking: 'R' },
-  // { time:  800, velocity: 'N', sticking: 'L' },
-  // { time: 1000, velocity: 'N', sticking: 'R' },
-  // { time: 1200, velocity: 'N', sticking: 'L' },
-  // { time: 1400, velocity: 'N', sticking: 'R' },
-  // { time: 1600, velocity: 'N', sticking: 'L' },
-  // { time: 1800, velocity: 'N', sticking: 'R' },
-  // { time: 2000, velocity: 'N', sticking: 'L' },
-  // { time: 2200, velocity: 'N', sticking: 'R' },
-  // { time: 2400, velocity: 'N', sticking: 'L' },
-  // { time: 2600, velocity: 'N', sticking: 'R' },
-  // { time: 2800, velocity: 'N', sticking: 'L' },
-  // { time: 3000, velocity: 'N', sticking: 'R' },
-// ];
 
 var diddle0 = [
   // { time:    0, velocity: 170, sticking: 'R' },
@@ -467,10 +401,93 @@ function scaleVelocity(pattern, factor, vmin = 32, vmax = 127) {
 
 function toNumericVelocity(v) {
   if (typeof v === 'number') return v;
-  if (v === 'A') return 127;
-  if (v === 'G') return 32;
+  const up = String(v || '').toUpperCase();
+  if (up === 'A') return 127;
+  if (up === 'G') return 32;
   // treat N, space, empty, undefined as normal
   return 64;
+}
+
+// Parse a tiny DSL for patterns: A/a=accent (R/L), G/g=ghost (R/L), N/n=normal (R/L), F/f=flam (two quick normals, sticking from case), .=rest.
+// Case encodes sticking: uppercase = R, lowercase = L. Returns an array of { time, velocity, sticking } spaced beatMs apart (default 200ms).
+function parsePatternDSL(dsl, beatMs = 200) {
+  if (!dsl || typeof dsl !== 'string') return [];
+  const events = [];
+  let t = 0;
+  const chars = Array.from(dsl);
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i];
+    if (ch === '.') {
+      t += beatMs;
+      continue;
+    }
+    const up = ch.toUpperCase();
+    const sticking = ch === up ? 'R' : 'L';
+
+    if (up === 'F') {
+      // Flam: two quick normal notes within one beat (sticking from case)
+      events.push({ time: t, velocity: 'N', sticking });
+      events.push({ time: t + FLAM_OFFSET_MS, velocity: 'N', sticking });
+      t += beatMs;
+      continue;
+    }
+    if (up === 'A' || up === 'G' || up === 'N') {
+      events.push({ time: t, velocity: up, sticking });
+      t += beatMs;
+    }
+  }
+  return events;
+}
+
+const PATTERN_LIBRARY = {
+  // RLRR LRLL | RLRR LRLL (accents on first of each half)
+  "Paradiddle": parsePatternDSL('AnNNaNnnAnNNaNnn'),
+  // Drag drag (each drag = G G N alternating R/L)
+  "Drap": parsePatternDSL('GGn.ggN.GGn.ggN.GGn.ggN.'),
+  // Flam tap alternating R/L
+  "Flam Tap": parsePatternDSL('Fn.fN.Fn.fN.Fn.fN.Fn.fN.'),
+  // Singles
+  "Singles": parsePatternDSL('NnNnNnNnNnNnNnNn'),
+};
+
+const DEFAULT_PATTERN_KEY = 'paradiddle';
+
+function setPattern(name, renderPatternOnly = true) {
+  const pat = PATTERN_LIBRARY[name] || PATTERN_LIBRARY[DEFAULT_PATTERN_KEY];
+  window._extendedPattern = pat;
+  window._lastMatchedPatternIdx = null;
+
+  const select = document.getElementById('patternSelect');
+  if (select && select.value !== name && PATTERN_LIBRARY[name]) {
+    select.value = name;
+  }
+
+  if (renderPatternOnly) {
+    renderPatternMatch(window._extendedPattern, [], 1, 0);
+  }
+}
+
+function populatePatternMenu() {
+  const select = document.getElementById('patternSelect');
+  if (!select) return;
+  select.innerHTML = '';
+  Object.keys(PATTERN_LIBRARY).forEach((key) => {
+    const opt = document.createElement('option');
+    opt.value = key;
+    opt.textContent = key;
+    select.appendChild(opt);
+  });
+  select.value = DEFAULT_PATTERN_KEY;
+  select.addEventListener('change', (evt) => {
+    const name = evt.target.value;
+    setPattern(name, true);
+    if (window._matchBuffer && window._matchBuffer.length > 0) {
+      const firstTime = window._matchBuffer[0].time;
+      const normalized = window._matchBuffer.map((m) => ({ time: m.time - firstTime, velocity: m.velocity, sticking: m.sticking }));
+      // Run search only against the selected pattern so the user choice is respected
+      search(window._extendedPattern, normalized, 1, 1, { render: true, patternName: name });
+    }
+  });
 }
 
 function trimMatchAfterLargeGap(match) {
@@ -684,7 +701,8 @@ function oldsearch(pattern, match, velocityWeight, stickingWeight) {
   }
 }
 
-function search(pattern, match, velocityWeight, stickingWeight) {
+function search(pattern, match, velocityWeight, stickingWeight, opts = {}) {
+  const { render = true, patternName = null } = opts;
   if (!match || !match.length) return;
   const trimmed = trimMatchAfterLargeGap(match);
   if (!trimmed || !trimmed.length) return;
@@ -754,10 +772,12 @@ function search(pattern, match, velocityWeight, stickingWeight) {
   }
 
   if (!candidates.length) {
-    console.log('search: no candidates, took ' + (performance.now() - t0).toFixed(2) + ' ms');
-    const dbg = document.getElementById('debug');
-    if (dbg) dbg.textContent = 'No candidates (search ' + (performance.now() - t0).toFixed(2) + ' ms)';
-    return;
+    if (render) {
+      console.log('search: no candidates, took ' + (performance.now() - t0).toFixed(2) + ' ms');
+      const dbg = document.getElementById('debug');
+      if (dbg) dbg.textContent = 'No candidates (search ' + (performance.now() - t0).toFixed(2) + ' ms)';
+    }
+    return null;
   }
 
   candidates.sort((a, b) => a.score - b.score);
@@ -767,8 +787,12 @@ function search(pattern, match, velocityWeight, stickingWeight) {
   window._lastCandidates = top;
 
   const best = top[0];
+  best.patternName = patternName;
+  if (!render) {
+    return best;
+  }
   try {
-    console.log('Best match found: scale=' + best.scale + ', translate=' + best.translate + (best.vscale ? (', vscale=' + best.vscale) : '') + '; search took ' + (performance.now() - t0).toFixed(2) + ' ms');
+    console.log('Best match found: scale=' + best.scale + ', translate=' + best.translate + (best.vscale ? (', vscale=' + best.vscale) : '') + '; search took ' + (performance.now() - t0).toFixed(2) + ' ms' + (patternName ? (' | pattern=' + patternName) : ''));
     console.log('  Component scores -> dynamics: ' + best.dynamics.toFixed(2) + ', timing: ' + best.timing.toFixed(2));
     console.log('  Counts -> extra beats: ' + (best.reuseCount || 0) + ', missed beats: ' + (best.gapCount || 0) + ', sticking: ' + (best.stickingCount || 0));
     console.log('  Transformed match times: ' + best.match.map((m) => m.time.toFixed(0)).join(', '));
@@ -779,18 +803,41 @@ function search(pattern, match, velocityWeight, stickingWeight) {
     renderPatternMatch(pat, best.match, 1.0, 0);
     const dbg = document.getElementById('debug');
     if (dbg) {
-      dbg.textContent = 'Dynamics: ' + best.dynamics.toFixed(2) + ' | Timing: ' + best.timing.toFixed(2) + ' | Combined: ' + best.score.toFixed(2) + ' | Extra: ' + (best.reuseCount || 0) + ' | Missed: ' + (best.gapCount || 0) + ' | Sticking: ' + (best.stickingCount || 0) + ' | Scale: ' + best.scale.toFixed(3) + ' | Translate: ' + best.translate.toFixed(1) + (best.vscale ? (' | Vscale: ' + best.vscale.toFixed(3)) : '');
+      dbg.textContent = 'Dynamics: ' + best.dynamics.toFixed(2) + ' | Timing: ' + best.timing.toFixed(2) + ' | Combined: ' + best.score.toFixed(2) + ' | Extra: ' + (best.reuseCount || 0) + ' | Missed: ' + (best.gapCount || 0) + ' | Sticking: ' + (best.stickingCount || 0) + ' | Scale: ' + best.scale.toFixed(3) + ' | Translate: ' + best.translate.toFixed(1) + (best.vscale ? (' | Vscale: ' + best.vscale.toFixed(3)) : '') + (patternName ? (' | Pattern: ' + patternName) : '');
     }
   } catch (e) {
     console.log('Rendering failed: ' + (e && e.message ? e.message : String(e)));
   }
+  return best;
 }
 
-// Use the manually extended pattern as-is
-window._extendedPattern = paradiddle;
+// Search all patterns in the library and auto-select the best-scoring pattern.
+function searchAcrossPatterns(match, velocityWeight, stickingWeight) {
+  if (!match || !match.length) return;
+  let bestOverall = null;
+  let bestPatternName = null;
 
-search(window._extendedPattern, diddle4, 1, 1);
-checkMidiPermission();
+  for (const [name, pat] of Object.entries(PATTERN_LIBRARY)) {
+    const result = search(pat, match, velocityWeight, stickingWeight, { render: false, patternName: name });
+    if (result && (bestOverall === null || result.score < bestOverall.score)) {
+      bestOverall = result;
+      bestPatternName = name;
+    }
+  }
+
+  if (!bestOverall || !bestPatternName) return;
+
+  // Switch to the winning pattern (render pattern only)
+  setPattern(bestPatternName, true);
+
+  // Render and log using the winning pattern; re-run search for side effects/state updates
+  search(PATTERN_LIBRARY[bestPatternName], match, velocityWeight, stickingWeight, { render: true, patternName: bestPatternName });
+}
+
+populatePatternMenu();
+setPattern(DEFAULT_PATTERN_KEY);
+searchAcrossPatterns(diddle4, 1, 1);
+//startMIDI();
 /*
 window.setTimeout(() =>
 {
@@ -812,7 +859,7 @@ window.setTimeout(() =>
         {
           //alert("diddle4");
           search(window._extendedPattern, diddle4, 1, 1);
-          window.setTimeout(checkMidiPermission, TEST_TIMEOUT);
+          window.setTimeout(startMIDI, TEST_TIMEOUT);
         }, TEST_TIMEOUT);
       }, TEST_TIMEOUT);
     }, TEST_TIMEOUT);
