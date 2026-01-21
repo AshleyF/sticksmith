@@ -8,12 +8,27 @@
   <h1>MIDI Monitor</h1>
   <label for="patternSelect">Pattern: </label>
   <select id="patternSelect"></select>
+  <div id="midiMap" style="margin-top:8px; font-family:sans-serif; font-size:12px;">
+    <strong>Stick mapping</strong>
+    <div style="margin-top:4px;">
+      <label>Right notes: <input id="rightNotes" type="text" placeholder="e.g. 38, 40" style="width:180px" /></label>
+      <button id="learnRight" type="button">Learn next note</button>
+    </div>
+    <div style="margin-top:4px;">
+      <label>Left notes: <input id="leftNotes" type="text" placeholder="e.g. 37, 42" style="width:180px" /></label>
+      <button id="learnLeft" type="button">Learn next note</button>
+    </div>
+    <div id="lastNote" style="margin-top:4px; color:#555;">Last MIDI note: --</div>
+  </div>
   <div id="debug"></div>
   <canvas id="patternCanvas" width="1125" height="300" style="border:1px solid #ddd; display:block; margin-top:6px"></canvas>
         <script>
 window._matchOrigin = performance.now();
 window._matchBuffer = [];
 window._switchPenaltyArmed = false;
+window._midiStickMap = { R: new Set(), L: new Set() };
+window._lastMidiNote = null;
+window._pendingStickLearn = null;
 const SCORE_DECAY_MS = 8000; // time constant for exponential weight and pruning
 const MAX_MATCH_BEATS = 12; // limit match buffer to most recent beats
 const STICKING_MISMATCH_BASE = 50000; // base penalty multiplier for sticking mismatches
@@ -72,6 +87,78 @@ function addMatchNoteAt(nowTimeMs, velocity, sticking) {
       console.error('Search failed:', err);
     }
   }
+}
+
+function parseNoteList(value) {
+  if (!value) return new Set();
+  const parts = String(value)
+    .split(/[,\s]+/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => Number(p));
+  const set = new Set();
+  for (let i = 0; i < parts.length; i++) {
+    const n = parts[i];
+    if (Number.isFinite(n)) set.add(Math.max(0, Math.min(127, Math.round(n))));
+  }
+  return set;
+}
+
+function updateStickMapFromInputs() {
+  const rightInput = document.getElementById('rightNotes');
+  const leftInput = document.getElementById('leftNotes');
+  if (!rightInput || !leftInput) return;
+  window._midiStickMap.R = parseNoteList(rightInput.value);
+  window._midiStickMap.L = parseNoteList(leftInput.value);
+  try {
+    localStorage.setItem('stickMapRight', rightInput.value || '');
+    localStorage.setItem('stickMapLeft', leftInput.value || '');
+  } catch (e) {
+    // ignore storage errors
+  }
+}
+
+function setupStickMappingUI() {
+  const rightInput = document.getElementById('rightNotes');
+  const leftInput = document.getElementById('leftNotes');
+  const learnRight = document.getElementById('learnRight');
+  const learnLeft = document.getElementById('learnLeft');
+  const lastNoteEl = document.getElementById('lastNote');
+
+  try {
+    if (rightInput) rightInput.value = localStorage.getItem('stickMapRight') || '';
+    if (leftInput) leftInput.value = localStorage.getItem('stickMapLeft') || '';
+  } catch (e) {
+    // ignore storage errors
+  }
+
+  if (rightInput) rightInput.addEventListener('input', updateStickMapFromInputs);
+  if (leftInput) leftInput.addEventListener('input', updateStickMapFromInputs);
+
+  function setLastNoteUI() {
+    if (lastNoteEl) {
+      lastNoteEl.textContent = window._lastMidiNote !== null
+        ? ('Last MIDI note: ' + window._lastMidiNote)
+        : 'Last MIDI note: --';
+    }
+  }
+
+  if (learnRight) {
+    learnRight.addEventListener('click', () => {
+      window._pendingStickLearn = 'R';
+      if (lastNoteEl) lastNoteEl.textContent = 'Hit a note to set Right stick';
+    });
+  }
+
+  if (learnLeft) {
+    learnLeft.addEventListener('click', () => {
+      window._pendingStickLearn = 'L';
+      if (lastNoteEl) lastNoteEl.textContent = 'Hit a note to set Left stick';
+    });
+  }
+
+  setLastNoteUI();
+  updateStickMapFromInputs();
 }
 
 // Keyboard test input
@@ -152,9 +239,26 @@ function handleInputsAndOutputs(midiAccess) {
         if (type === 'noteon' || type === 'noteoff') {
           const note = data[1];
           const velocity = data[2];
+          window._lastMidiNote = note;
+          const lastNoteEl = document.getElementById('lastNote');
+          if (window._pendingStickLearn) {
+            const target = window._pendingStickLearn;
+            const input = target === 'R' ? document.getElementById('rightNotes') : document.getElementById('leftNotes');
+            const current = parseNoteList(input ? input.value : '');
+            current.add(note);
+            if (input) input.value = Array.from(current).sort((a, b) => a - b).join(', ');
+            updateStickMapFromInputs();
+            window._pendingStickLearn = null;
+          }
+          if (lastNoteEl) {
+            lastNoteEl.textContent = window._lastMidiNote !== null
+              ? ('Last MIDI note: ' + window._lastMidiNote)
+              : 'Last MIDI note: --';
+          }
           console.log(`MIDI parsed: ${type} ch=${channel+1} note=${note} (${noteName(note)}) velocity=${velocity}`);
         } else if (type === 'controlchange') {
           console.log(`MIDI parsed: controlchange ch=${channel+1} controller=${data[1]} value=${data[2]}`);
+          console.log(`CC ch${channel+1}: ${data[1]} -> ${data[2]}`);
         } else if (type === 'programchange') {
           console.log(`MIDI parsed: programchange ch=${channel+1} program=${data[1]}`);
         } else {
@@ -176,8 +280,13 @@ function handleInputsAndOutputs(midiAccess) {
         const cmd = status & 0xf0;
         // 0x90 = Note On; treat velocity 0 as Note Off
         if (cmd === 0x90 && data2 > 0) {
+          const note = data1;
+          const map = window._midiStickMap || { R: new Set(), L: new Set() };
+          let sticking = '';
+          if (map.R && map.R.has(note)) sticking = 'R';
+          else if (map.L && map.L.has(note)) sticking = 'L';
           // Use performance.now() for timing accuracy
-          addMatchNoteAt(performance.now(), data2);
+          addMatchNoteAt(performance.now(), data2, sticking);
         }
       }
     } catch (e) {
@@ -827,6 +936,7 @@ function searchAcrossPatterns(match, velocityWeight, stickingWeight) {
 
 populatePatternMenu();
 setPattern(DEFAULT_PATTERN_KEY);
+setupStickMappingUI();
 searchAcrossPatterns(diddle4, 1, 1);
 startMIDI();
 /*
