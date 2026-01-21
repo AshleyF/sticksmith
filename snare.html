@@ -47,7 +47,7 @@
         if (state.lastHit) {
           const slices = 8;
           const sliceAngle = (Math.PI * 2) / slices;
-          const sliceStart = state.lastHit.sliceIndex * sliceAngle;
+          const sliceStart = state.lastHit.sliceIndex * sliceAngle - Math.PI / 2;
           const sliceEnd = sliceStart + sliceAngle;
 
           // highlight slice
@@ -153,8 +153,8 @@
             } else if (cmd === 0xb0) {
               console.log(`CC ch${channel + 1}: ${data1} -> ${data2}`);
               if (data1 === 80) state.angleCc = data2;
-              if (data1 === 88) state.radiusCc = data2;
-              if (data1 === 16) state.velocityLsb = data2;
+              if (data1 === 16) state.radiusCc = data2;
+              if (data1 === 88) state.velocityLsb = data2;
             } else {
               console.log(`MIDI cmd=0x${cmd.toString(16)} ch=${channel + 1} raw=[${Array.from(data).join(',')}]`);
             }
