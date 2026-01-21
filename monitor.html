@@ -13,20 +13,33 @@
         <script>
 window._matchOrigin = performance.now();
 window._matchBuffer = [];
-const MATCH_WINDOW = 3000;
-const SCORE_DECAY_MS = 3000; // time constant for exponential weight and pruning
-const MAX_MATCH_BEATS = 8; // limit match buffer to most recent beats
+window._switchPenaltyArmed = false;
+const SCORE_DECAY_MS = 8000; // time constant for exponential weight and pruning
+const MAX_MATCH_BEATS = 12; // limit match buffer to most recent beats
 const STICKING_MISMATCH_BASE = 50000; // base penalty multiplier for sticking mismatches
-const NOTE_AGE_CUTOFF_MS = 3000; // discard notes older than this relative to end
+const NOTE_AGE_CUTOFF_MS = 8000; // discard notes older than this relative to end
+const MATCH_RESET_GAP_MS = 3000; // reset match if there's a long pause between hits
 const TOP_CANDIDATES = 10; // number of best candidates to keep
 const PROGRESS_PENALTY = 20; // penalty if latest note does not advance to expected pattern beat
+const PATTERN_SWITCH_PENALTY = 10; // penalty when switching away from current pattern
 const DISQUALIFIED_SCORE = 1e12; // large finite score used when extras/misses occur
 const FLAM_OFFSET_MS = 30; // spacing between notes in a flam
 const DRAG_OFFSET_MS = 30; // spacing between notes in a drag
-const TEST_TIMEOUT = 1000;
+//const TEST_TIMEOUT = 1000;
 
 function addMatchNoteAt(nowTimeMs, velocity, sticking) {
-  const t = nowTimeMs - window._matchOrigin;
+  let t = nowTimeMs - window._matchOrigin;
+  if (window._matchBuffer.length > 0) {
+    const lastTime = window._matchBuffer[window._matchBuffer.length - 1].time;
+    const gapMs = t - lastTime;
+    if (gapMs > MATCH_RESET_GAP_MS) {
+      window._matchBuffer = [];
+      window._matchOrigin = nowTimeMs;
+      window._switchPenaltyArmed = false;
+      t = 0;
+    }
+  }
+  if (!window._switchPenaltyArmed) window._switchPenaltyArmed = true;
   window._matchBuffer.push({ time: t, velocity: Number(velocity || 0), sticking: sticking || '' });
   // prune old notes
   // Use a dynamic match window based on the extended pattern length
@@ -50,6 +63,7 @@ function addMatchNoteAt(nowTimeMs, velocity, sticking) {
   if (window._matchBuffer.length > 0) {
     const firstTime = window._matchBuffer[0].time;
     const normalized = window._matchBuffer.map((m) => ({ time: m.time - firstTime, velocity: m.velocity, sticking: m.sticking }));
+    console.log('Match times: [' + normalized.map((m) => m.time.toFixed(0)).join(', ') + ']');
     // call search using the same pattern setup used elsewhere, with normalized times
     try {
       console.log('Calling search with normalized match buffer (' + normalized.length + ' events)');
@@ -489,13 +503,15 @@ const PATTERN_LIBRARY = {
 const DEFAULT_PATTERN_KEY = 'paradiddle';
 
 function setPattern(name, renderPatternOnly = true) {
-  const pat = PATTERN_LIBRARY[name] || PATTERN_LIBRARY[DEFAULT_PATTERN_KEY];
+  const resolvedName = PATTERN_LIBRARY[name] ? name : DEFAULT_PATTERN_KEY;
+  const pat = PATTERN_LIBRARY[resolvedName] || PATTERN_LIBRARY[DEFAULT_PATTERN_KEY];
   window._extendedPattern = pat;
   window._lastMatchedPatternIdx = null;
+  window._currentPatternName = resolvedName;
 
   const select = document.getElementById('patternSelect');
-  if (select && select.value !== name && PATTERN_LIBRARY[name]) {
-    select.value = name;
+  if (select && select.value !== resolvedName && PATTERN_LIBRARY[resolvedName]) {
+    select.value = resolvedName;
   }
 
   if (renderPatternOnly) {
@@ -667,76 +683,6 @@ window._lastRender = null;
 // Track last matched pattern index for progress heuristic
 window._lastMatchedPatternIdx = null;
 
-function oldsearch(pattern, match, velocityWeight, stickingWeight) {
-  if (!match || !match.length) return;
-  // Compute velocity stats from the incoming match
-  const velocities = match.map((m) => Number(m.velocity || 0));
-  const vMin = Math.min.apply(null, velocities);
-  const vMax = Math.max.apply(null, velocities);
-  const vMean = velocities.reduce((sum, v) => sum + v, 0) / velocities.length;
-  const span = Math.max(1e-3, Math.max(vMax - vMean, vMean - vMin));
-  const targetGhost = 32;
-  const targetNormal = 64;
-  const targetAccent = 127;
-  // Normalize velocities toward ghost/normal/accent anchors, but keep tiny ranges near normal.
-  const normalizedMatch = match.map((m) => {
-    const v = Number(m.velocity || 0);
-    const z = (v - vMean) / span; // roughly -1..1 when data spans both sides of mean
-    const mapped = targetNormal + z * (targetAccent - targetNormal);
-    const clamped = Math.max(targetGhost, Math.min(targetAccent, mapped));
-    return { ...m, velocity: clamped };
-  });
-
-  // Use the pattern exactly as provided by the caller. Do not extend here to
-  // avoid duplicating repetitions when the caller already passed an extended pattern.
-  var pat = pattern.map((p) => ({ time: p.time, velocity: toNumericVelocity(p.velocity), sticking: p.sticking }));
-
-  console.log('Searching (normalized): ' + JSON.stringify(normalizedMatch));
-  
-  // Filter match to only include notes within the pattern's time range
-  var patMinTime = pat[0].time;
-  var patMaxTime = pat[pat.length - 1].time;
-  var filteredMatch = normalizedMatch.filter((m) => m.time >= patMinTime && m.time <= patMaxTime);
-
-  if (filteredMatch.length === 0) {
-    return
-  }
-  
-  var best = Number.MAX_VALUE;
-  var bestScale = 1.0;
-  var bestTranslate = 0;
-  
-  for (var st = 0.5; st <= 2.0; st += 0.1) {
-    for (var tt = 0; tt <= MATCH_WINDOW * 2; tt += 10 * st) {
-      var scaledTime = scaleTime(filteredMatch, st);
-      var translatedTime = translateTime(scaledTime, tt);
-      var s = score(pat, translatedTime, velocityWeight, stickingWeight);
-      var combined = Math.sqrt(s.dynamics * s.dynamics + s.timing * s.timing);
-      //console.log("Score: " + combined + " scale: " + st + " translate: " + tt + " (" + combined + ")");
-      if (combined < best) {
-        best = combined;
-        bestScale = st;
-        bestTranslate = tt;
-        console.log("Best score: " + best + " scale: " + st + " translate: " + tt + " (" + combined + ")");
-      }
-    }
-  }
-  // After searching, record the result and render the pattern and the best-matching transformed match on the canvas
-  try {
-    // Transform the match using the best scale/translate found
-    const scaledMatch = scaleTime(normalizedMatch, bestScale);
-    const transformedMatch = translateTime(scaledMatch, bestTranslate);
-    console.log('Best match found: scale=' + bestScale + ', translate=' + bestTranslate);
-    console.log('  Transformed match times: ' + transformedMatch.map((m) => m.time.toFixed(0)).join(', '));
-    // store last render state for interactive resizing
-    window._lastRender = { pat: pat, match: transformedMatch, scale: bestScale, translate: bestTranslate };
-    // Pass the already-transformed match to render (no scale/translate parameters needed)
-    renderPatternMatch(pat, transformedMatch, 1.0, 0);
-  } catch (e) {
-    console.log('Rendering failed: ' + (e && e.message ? e.message : String(e)));
-  }
-}
-
 function search(pattern, match, velocityWeight, stickingWeight, opts = {}) {
   const { render = true, patternName = null } = opts;
   if (!match || !match.length) return;
@@ -773,36 +719,38 @@ function search(pattern, match, velocityWeight, stickingWeight, opts = {}) {
     if (!p1) continue; // require a next beat
     for (let mi = 0; mi < workMatch.length; mi++) {
       const m0 = workMatch[mi];
-      const m1 = workMatch[mi + 1];
-      if (!m1) continue; // require a next beat
+      for (let skip = 1; skip <= 3; skip++) {
+        const m1 = workMatch[mi + skip];
+        if (!m1) continue; // require a next beat (possibly skipping flams/drags)
 
-      const denom = (m1.time - m0.time);
-      if (Math.abs(denom) < denomEps) continue;
+        const denom = (m1.time - m0.time);
+        if (Math.abs(denom) < denomEps) continue;
 
-      const scale = (p1.time - p0.time) / denom;
-      if (!isFinite(scale) || scale <= 0) continue;
+        const scale = (p1.time - p0.time) / denom;
+        if (!isFinite(scale) || scale <= 0) continue;
 
-      const translate = p0.time - m0.time * scale;
-      if (translate < 0) continue; // do not explore negative translations
-      const scaledTimeMatch = scaleTime(workMatch, scale);
-      const mv0 = Number(m0.velocity || 0);
-      const pv0 = Number(p0.velocity || 0);
-      const vscale = mv0 > 0 ? (pv0 / mv0) : 1;
-      if (!isFinite(vscale) || vscale <= 0) continue;
-      const timeTranslated = translateTime(scaledTimeMatch, translate);
-      const scaledVelMatch = scaleVelocity(timeTranslated, vscale);
-      const sc = score(pat, scaledVelMatch, velocityWeight, stickingWeight);
-      if (Number.isFinite(sc.dynamics) && Number.isFinite(sc.timing) && sc.dynamics !== Number.MAX_VALUE && sc.timing !== Number.MAX_VALUE) {
-        const combined = Math.sqrt(sc.dynamics * sc.dynamics + sc.timing * sc.timing);
-        let finalScore = combined;
-        const latestIdx = mapLatestMatchToPattern(timeTranslated, pat);
-        if (window._lastMatchedPatternIdx !== null && latestIdx >= 0) {
-          const expected = window._lastMatchedPatternIdx + 1;
-          if (latestIdx !== expected) {
-            finalScore += PROGRESS_PENALTY;
+        const translate = p0.time - m0.time * scale;
+        if (translate < 0) continue; // do not explore negative translations
+        const scaledTimeMatch = scaleTime(workMatch, scale);
+        const mv0 = Number(m0.velocity || 0);
+        const pv0 = Number(p0.velocity || 0);
+        const vscale = mv0 > 0 ? (pv0 / mv0) : 1;
+        if (!isFinite(vscale) || vscale <= 0) continue;
+        const timeTranslated = translateTime(scaledTimeMatch, translate);
+        const scaledVelMatch = scaleVelocity(timeTranslated, vscale);
+        const sc = score(pat, scaledVelMatch, velocityWeight, stickingWeight);
+        if (Number.isFinite(sc.dynamics) && Number.isFinite(sc.timing) && sc.dynamics !== Number.MAX_VALUE && sc.timing !== Number.MAX_VALUE) {
+          const combined = Math.sqrt(sc.dynamics * sc.dynamics + sc.timing * sc.timing);
+          let finalScore = combined;
+          const latestIdx = mapLatestMatchToPattern(timeTranslated, pat);
+          if (window._lastMatchedPatternIdx !== null && latestIdx >= 0) {
+            const expected = window._lastMatchedPatternIdx + 1;
+            if (latestIdx !== expected) {
+              finalScore += PROGRESS_PENALTY;
+            }
           }
+          candidates.push({ score: finalScore, dynamics: sc.dynamics, timing: sc.timing, reuseCount: sc.reuseCount, gapCount: sc.gapCount, stickingCount: sc.stickingCount, latestIdx, scale, translate, vscale, match: scaledVelMatch });
         }
-        candidates.push({ score: finalScore, dynamics: sc.dynamics, timing: sc.timing, reuseCount: sc.reuseCount, gapCount: sc.gapCount, stickingCount: sc.stickingCount, latestIdx, scale, translate, vscale, match: scaledVelMatch });
       }
     }
   }
@@ -852,10 +800,17 @@ function searchAcrossPatterns(match, velocityWeight, stickingWeight) {
   if (!match || !match.length) return;
   let bestOverall = null;
   let bestPatternName = null;
+  let bestOverallScore = Number.MAX_VALUE;
+  const currentName = window._currentPatternName || null;
+  const allowPenalty = window._switchPenaltyArmed === true;
 
   for (const [name, pat] of Object.entries(PATTERN_LIBRARY)) {
     const result = search(pat, match, velocityWeight, stickingWeight, { render: false, patternName: name });
-    if (result && (bestOverall === null || result.score < bestOverall.score)) {
+    if (!result) continue;
+    const switchPenalty = (allowPenalty && currentName && name !== currentName) ? PATTERN_SWITCH_PENALTY : 0;
+    const effectiveScore = result.score + switchPenalty;
+    if (effectiveScore < bestOverallScore) {
+      bestOverallScore = effectiveScore;
       bestOverall = result;
       bestPatternName = name;
     }
@@ -873,7 +828,7 @@ function searchAcrossPatterns(match, velocityWeight, stickingWeight) {
 populatePatternMenu();
 setPattern(DEFAULT_PATTERN_KEY);
 searchAcrossPatterns(diddle4, 1, 1);
-//startMIDI();
+startMIDI();
 /*
 window.setTimeout(() =>
 {
