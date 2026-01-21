@@ -22,6 +22,7 @@ const TOP_CANDIDATES = 10; // number of best candidates to keep
 const PROGRESS_PENALTY = 20; // penalty if latest note does not advance to expected pattern beat
 const DISQUALIFIED_SCORE = 1e12; // large finite score used when extras/misses occur
 const FLAM_OFFSET_MS = 30; // spacing between notes in a flam
+const DRAG_OFFSET_MS = 30; // spacing between notes in a drag
 const TEST_TIMEOUT = 1000;
 
 function addMatchNoteAt(nowTimeMs, velocity, sticking) {
@@ -408,12 +409,14 @@ function toNumericVelocity(v) {
   return 64;
 }
 
-// Parse a tiny DSL for patterns: A/a=accent (R/L), G/g=ghost (R/L), N/n=normal (R/L), F/f=flam (two quick normals, sticking from case), .=rest.
+// Parse a tiny DSL for patterns: A/a=accent (R/L), G/g=ghost (R/L), N/n=normal (R/L), F/f=flam (two quick normals, sticking from case), D/d=double (two normals evenly spaced in one beat), .=rest.
 // Case encodes sticking: uppercase = R, lowercase = L. Returns an array of { time, velocity, sticking } spaced beatMs apart (default 200ms).
-function parsePatternDSL(dsl, beatMs = 200) {
+function parsePatternDSL(dsl, beatMs = 200, opts = {}) {
   if (!dsl || typeof dsl !== 'string') return [];
+  const { repeat = false } = opts || {};
   const events = [];
   let t = 0;
+  let hitCount = 0;
   const chars = Array.from(dsl);
   for (let i = 0; i < chars.length; i++) {
     const ch = chars[i];
@@ -429,25 +432,58 @@ function parsePatternDSL(dsl, beatMs = 200) {
       events.push({ time: t, velocity: 'N', sticking });
       events.push({ time: t + FLAM_OFFSET_MS, velocity: 'N', sticking });
       t += beatMs;
+      hitCount += 2;
+      continue;
+    }
+    if (up === 'D') {
+      // Double: two evenly spaced normal notes, taking two beats
+      events.push({ time: t, velocity: 'N', sticking });
+      events.push({ time: t + beatMs, velocity: 'N', sticking });
+      t += beatMs * 2;
+      hitCount += 2;
+      continue;
+    }
+    if (up === 'R') {
+      // Drag: two evenly spaced ghost notes and a normal note within one beat
+      events.push({ time: t, velocity: 'G', sticking });
+      events.push({ time: t + FLAM_OFFSET_MS, velocity: 'G', sticking });
+      events.push({ time: t + FLAM_OFFSET_MS * 2, velocity: 'N', sticking });
+      t += beatMs;
+      hitCount += 2;
       continue;
     }
     if (up === 'A' || up === 'G' || up === 'N') {
       events.push({ time: t, velocity: up, sticking });
       t += beatMs;
+      hitCount += 1;
     }
   }
-  return events;
+
+  if (!repeat || events.length === 0 || t <= 0 || hitCount <= 0) return events;
+
+  const minHits = MAX_MATCH_BEATS * 2;
+  const repeats = Math.max(2, Math.ceil(minHits / hitCount));
+  const extended = [];
+  for (let r = 0; r < repeats; r++) {
+    const offset = r * t;
+    for (let i = 0; i < events.length; i++) {
+      const e = events[i];
+      extended.push({ time: e.time + offset, velocity: e.velocity, sticking: e.sticking });
+    }
+  }
+  return extended;
 }
 
 const PATTERN_LIBRARY = {
-  // RLRR LRLL | RLRR LRLL (accents on first of each half)
-  "Paradiddle": parsePatternDSL('AnNNaNnnAnNNaNnn'),
-  // Drag drag (each drag = G G N alternating R/L)
-  "Drap": parsePatternDSL('GGn.ggN.GGn.ggN.GGn.ggN.'),
-  // Flam tap alternating R/L
-  "Flam Tap": parsePatternDSL('Fn.fN.Fn.fN.Fn.fN.Fn.fN.'),
-  // Singles
-  "Singles": parsePatternDSL('NnNnNnNnNnNnNnNn'),
+  "Single Stroke Roll": parsePatternDSL('Nn', 200, { repeat: true }),
+  "Double Stroke Roll": parsePatternDSL('Dd', 200, { repeat: true }),
+  "Five Stroke Roll": parsePatternDSL('DdA...', 200, { repeat: true }),
+  "Single Paradiddle": parsePatternDSL('AnDaNd', 200, { repeat: true }),
+  "Double Paradiddle": parsePatternDSL('AnNnDaNnNd', 200, { repeat: true }),
+  "Triple Paradiddle": parsePatternDSL('AnNnNnDaNnNnNd', 200, { repeat: true }),
+  "Flam": parsePatternDSL('Ff', 200, { repeat: true }),
+  "Drag": parsePatternDSL('Rr', 200, { repeat: true }),
+  "Flam Tap": parsePatternDSL('Fg.fG.', 200, { repeat: true }),
 };
 
 const DEFAULT_PATTERN_KEY = 'paradiddle';
