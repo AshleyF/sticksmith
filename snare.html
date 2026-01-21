@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Roland PD14-DSX</title>
+  </head>
+  <body style="margin:0; background:#111; color:#fff; font-family:sans-serif;">
+    <h1>Roland PD-14DSX</h1>
+    <div id="status">Initializing MIDI…</div>
+    <canvas id="snareCanvas" width="1152" height="900" style="border:1px solid #333; display:block; margin-top:8px;"></canvas>
+    <script>
+      const canvas = document.getElementById('snareCanvas');
+      const ctx = canvas.getContext('2d');
+      const center = { x: canvas.width / 2, y: canvas.height / 2 };
+      const maxRadius = Math.min(canvas.width, canvas.height) * 0.45;
+
+      const state = {
+        angleCc: 0,
+        radiusCc: 0,
+        velocityMsb: 0,
+        velocityLsb: 0,
+        velocity14: 0,
+        lastHit: null,
+      };
+
+      function drawSnare() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(center.x, center.y, maxRadius, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // velocity bar (right side)
+        const barW = 24;
+        const barH = maxRadius * 2;
+        const barX = center.x + maxRadius + 20;
+        const barY = center.y - maxRadius;
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(barX, barY, barW, barH);
+        const vNorm = Math.max(0, Math.min(1, state.velocity14 / 16383));
+        const fillH = barH * vNorm;
+        ctx.fillStyle = 'rgba(255, 80, 80, 0.9)';
+        ctx.fillRect(barX, barY + (barH - fillH), barW, fillH);
+
+        if (state.lastHit) {
+          const slices = 8;
+          const sliceAngle = (Math.PI * 2) / slices;
+          const sliceStart = state.lastHit.sliceIndex * sliceAngle;
+          const sliceEnd = sliceStart + sliceAngle;
+
+          // highlight slice
+          ctx.fillStyle = 'rgba(100, 170, 255, 0.35)';
+          ctx.beginPath();
+          ctx.moveTo(center.x, center.y);
+          ctx.arc(center.x, center.y, maxRadius, sliceStart, sliceEnd);
+          ctx.closePath();
+          ctx.fill();
+
+          // draw curved stripe at radius
+          ctx.strokeStyle = 'rgba(255, 80, 80, 0.9)';
+          ctx.lineWidth = 32;
+          ctx.beginPath();
+          ctx.arc(center.x, center.y, state.lastHit.radius, sliceStart, sliceEnd);
+          ctx.stroke();
+        }
+      }
+
+      function updateHitFromCc() {
+        const slices = 8;
+        const sliceIndex = Math.max(0, Math.min(slices - 1, Math.floor(state.angleCc / 16)));
+        const stripeHalf = 16; // half of lineWidth (32)
+        const rawRadius = (state.radiusCc / 127) * maxRadius;
+        const radius = Math.max(stripeHalf, Math.min(maxRadius - stripeHalf, rawRadius));
+        state.lastHit = { sliceIndex, radius };
+        drawSnare();
+      }
+
+      function updateHitFromTest() {
+        const slices = 8;
+        const sliceIndex = Math.max(0, Math.min(slices - 1, Math.floor(state.angleCc / 16)));
+        const stripeHalf = 16; // half of lineWidth (32)
+        const rawRadius = (state.radiusCc / 127) * maxRadius;
+        const radius = Math.max(stripeHalf, Math.min(maxRadius - stripeHalf, rawRadius));
+        state.lastHit = { sliceIndex, radius };
+        drawSnare();
+      }
+
+      window.addEventListener('keydown', (evt) => {
+        const key = (evt.key || '').toLowerCase();
+        if (key >= '1' && key <= '8') {
+          const idx = Number(key) - 1;
+          state.angleCc = idx * 16;
+          updateHitFromTest();
+          evt.preventDefault();
+          return;
+        }
+        if (key === 'c') {
+          state.radiusCc = 0;
+          state.velocity14 = 16383;
+          updateHitFromTest();
+          evt.preventDefault();
+          return;
+        }
+        if (key === 'm') {
+          state.radiusCc = 64;
+          state.velocity14 = 8192;
+          updateHitFromTest();
+          evt.preventDefault();
+          return;
+        }
+        if (key === 'e') {
+          state.radiusCc = 127;
+          state.velocity14 = 2048;
+          updateHitFromTest();
+          evt.preventDefault();
+        }
+      });
+
+      drawSnare();
+
+      function log(msg) {
+        console.log(msg);
+        const status = document.getElementById('status');
+        if (status) status.textContent = msg;
+      }
+
+      function handleInputsAndOutputs(midiAccess) {
+        log('MIDI access granted. Listening for messages…');
+
+        function onMIDIMessage(event) {
+          const data = event.data || [];
+          let str = `MIDI @ ${event.timeStamp} [${data.length} bytes]: `;
+          for (const b of data) str += `0x${b.toString(16)} `;
+          console.log(str);
+
+          if (data.length >= 1) {
+            const status = data[0];
+            const cmd = status & 0xf0;
+            const channel = status & 0x0f;
+            const data1 = data[1];
+            const data2 = data[2];
+
+            if (cmd === 0x90 || cmd === 0x80) {
+              const type = cmd === 0x90 ? 'noteon' : 'noteoff';
+              console.log(`NOTE ${type} ch=${channel + 1} note=${data1} vel=${data2}`);
+              if (cmd === 0x90 && data2 > 0) {
+                state.velocityMsb = data2;
+                state.velocity14 = (state.velocityMsb << 7) | (state.velocityLsb & 0x7f);
+                updateHitFromCc();
+              }
+            } else if (cmd === 0xb0) {
+              console.log(`CC ch${channel + 1}: ${data1} -> ${data2}`);
+              if (data1 === 80) state.angleCc = data2;
+              if (data1 === 88) state.radiusCc = data2;
+              if (data1 === 16) state.velocityLsb = data2;
+            } else {
+              console.log(`MIDI cmd=0x${cmd.toString(16)} ch=${channel + 1} raw=[${Array.from(data).join(',')}]`);
+            }
+          }
+        }
+
+        midiAccess.inputs.forEach((entry) => {
+          const input = entry[1] || entry;
+          if (typeof input.onmidimessage !== 'undefined') {
+            input.onmidimessage = onMIDIMessage;
+            console.log('Attached onmidimessage to input:', input.id || input.name || input);
+          }
+        });
+
+        if (typeof midiAccess.onstatechange === 'undefined') {
+          midiAccess.onstatechange = (e) => {
+            console.log('MIDI device state changed', e);
+          };
+        }
+      }
+
+      async function requestMidiAccess() {
+        if (typeof navigator.requestMIDIAccess === 'function') {
+          try {
+            const access = await navigator.requestMIDIAccess({ sysex: true });
+            handleInputsAndOutputs(access);
+          } catch (err) {
+            log('requestMIDIAccess failed: ' + (err && err.message ? err.message : String(err)));
+          }
+        } else {
+          log('Web MIDI API not available in this browser.');
+        }
+      }
+
+      async function startMIDI() {
+        const hasPermissionsAPI = !!navigator.permissions && typeof navigator.permissions.query === 'function';
+        if (hasPermissionsAPI) {
+          try {
+            const result = await navigator.permissions.query({ name: 'midi', sysex: true });
+            if (result.state === 'granted' || result.state === 'prompt') {
+              await requestMidiAccess();
+            } else {
+              log('MIDI access denied.');
+            }
+            return;
+          } catch (err) {
+            // Fall back to requestMIDIAccess
+          }
+        }
+        await requestMidiAccess();
+      }
+
+      startMIDI();
+    </script>
+  </body>
+</html>
