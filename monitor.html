@@ -37,7 +37,7 @@
     <div id="lastNote" style="margin-top:4px; color:#888;">Last MIDI note: --</div>
   </div>
   <div id="debug"></div>
-  <canvas id="patternCanvas" width="1200" height="580" style="display:block; margin-top:10px"></canvas>
+  <canvas id="patternCanvas" width="1200" height="720" style="display:block; margin-top:10px"></canvas>
         <script>
 window._matchOrigin = performance.now();
 window._matchBuffer = [];
@@ -595,8 +595,9 @@ function parsePatternDSL(dsl, beatMs = 200, opts = {}) {
 
     if (up === 'F') {
       // Flam: two quick normal notes within one beat (sticking from case)
+      const secondSticking = sticking === 'R' ? 'L' : 'R';
       events.push({ time: t, velocity: 'N', sticking });
-      events.push({ time: t + FLAM_OFFSET_MS, velocity: 'N', sticking });
+      events.push({ time: t + FLAM_OFFSET_MS, velocity: 'N', sticking: secondSticking });
       t += beatMs;
       hitCount += 2;
       continue;
@@ -646,12 +647,18 @@ const PATTERN_LIBRARY = {
   "Five Stroke Roll (Right)": parsePatternDSL('DdA...', 256, { repeat: true }),
   "Five Stroke Roll (Left)": parsePatternDSL('dDa...', 256, { repeat: true }),
   "Five Stroke Roll (Alternating)": parsePatternDSL('DdA...dDa...', 256, { repeat: true }),
-  "Single Paradiddle": parsePatternDSL('AnDaNd', 256, { repeat: true }),
-  "Double Paradiddle": parsePatternDSL('AnNnDaNnNd', 256, { repeat: true }),
-  "Triple Paradiddle": parsePatternDSL('AnNnNnDaNnNnNd', 256, { repeat: true }),
-  "Flam": parsePatternDSL('Ff', 256, { repeat: true }),
-  "Drag": parsePatternDSL('Rr', 256, { repeat: true }),
-  "Flam Tap": parsePatternDSL('Fg.fG.', 256, { repeat: true }),
+  "Single Paradiddle": parsePatternDSL('AnNNaNnn', 256, { repeat: true }),
+  "Double Paradiddle": parsePatternDSL('AnNnNNaNnNnn', 256, { repeat: true }),
+  "Triple Paradiddle": parsePatternDSL('AnNnNnNNaNnNnNnn', 256, { repeat: true }),
+  "Flam (Right)": parsePatternDSL('F', 256, { repeat: true }),
+  "Flam (Left)": parsePatternDSL('f', 256, { repeat: true }),
+  "Flam (Alternating)": parsePatternDSL('Ff', 256, { repeat: true }),
+  "Drag (Right)": parsePatternDSL('R', 256, { repeat: true }),
+  "Drag (Left)": parsePatternDSL('r', 256, { repeat: true }),
+  "Drag (Alternating)": parsePatternDSL('Rr', 256, { repeat: true }),
+  "Flam Tap (Right)": parsePatternDSL('Fg.', 256, { repeat: true }),
+  "Flam Tap (Left)": parsePatternDSL('fG.', 256, { repeat: true }),
+  "Flam Tap (Alternating)": parsePatternDSL('Fg.fG.', 256, { repeat: true }),
 };
 
 const DEFAULT_PATTERN_KEY = 'paradiddle';
@@ -670,6 +677,9 @@ function setPattern(name, renderPatternOnly = true) {
   if (select && select.value !== resolvedName && PATTERN_LIBRARY[resolvedName]) {
     select.value = resolvedName;
   }
+
+  // Render the musical notation for this pattern
+  renderNotation(resolvedName);
 
   if (renderPatternOnly) {
     renderPatternMatch(window._extendedPattern, [], 1, 0);
@@ -732,6 +742,481 @@ function translateTime(pattern, offset) {
   }
   return translated;
 }
+
+// ========== NOTATION RENDERING (SVG) ==========
+// SVG helpers for musical notation rendering
+function createSvgElement(tag) {
+  return document.createElementNS("http://www.w3.org/2000/svg", tag);
+}
+
+function makeSvg(width, height) {
+  const svg = createSvgElement("svg");
+  svg.setAttribute("width", width);
+  svg.setAttribute("height", height);
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("fill", "none");
+  return svg;
+}
+
+function makeLine(x1, y1, x2, y2, strokeWidth, color) {
+  const line = createSvgElement("line");
+  line.setAttribute("x1", x1);
+  line.setAttribute("y1", y1);
+  line.setAttribute("x2", x2);
+  line.setAttribute("y2", y2);
+  line.setAttribute("stroke", color);
+  line.setAttribute("stroke-width", strokeWidth);
+  line.setAttribute("stroke-linecap", "round");
+  return line;
+}
+
+function makeText(x, y, text, size, anchor, color) {
+  const t = createSvgElement("text");
+  t.setAttribute("x", x);
+  t.setAttribute("y", y);
+  t.setAttribute("fill", color);
+  t.setAttribute("font-size", size);
+  t.setAttribute("font-family", "sans-serif");
+  t.setAttribute("text-anchor", anchor || "start");
+  t.textContent = text;
+  return t;
+}
+
+function makeNotehead(x, y, fill, rx = 9, ry = 6.5, angleRad = -25 * Math.PI / 180) {
+  const head = createSvgElement("ellipse");
+  head.setAttribute("cx", x);
+  head.setAttribute("cy", y);
+  head.setAttribute("rx", rx);
+  head.setAttribute("ry", ry);
+  head.setAttribute("fill", fill);
+  head.setAttribute("transform", `rotate(${angleRad * 180 / Math.PI} ${x} ${y})`);
+  return head;
+}
+
+function makeGhostParens(x, y, ry, color, strokeWidth = 1.5) {
+  // Draw parentheses around the notehead for ghost notes
+  const g = createSvgElement("g");
+  const offset = 14; // horizontal offset from note center
+  const height = ry * 2.2;
+  // Left paren
+  const leftParen = createSvgElement("path");
+  leftParen.setAttribute("d", `M ${x - offset + 4} ${y - height / 2} Q ${x - offset - 2} ${y}, ${x - offset + 4} ${y + height / 2}`);
+  leftParen.setAttribute("stroke", color);
+  leftParen.setAttribute("stroke-width", strokeWidth);
+  leftParen.setAttribute("fill", "none");
+  leftParen.setAttribute("stroke-linecap", "round");
+  g.appendChild(leftParen);
+  // Right paren
+  const rightParen = createSvgElement("path");
+  rightParen.setAttribute("d", `M ${x + offset - 4} ${y - height / 2} Q ${x + offset + 2} ${y}, ${x + offset - 4} ${y + height / 2}`);
+  rightParen.setAttribute("stroke", color);
+  rightParen.setAttribute("stroke-width", strokeWidth);
+  rightParen.setAttribute("fill", "none");
+  rightParen.setAttribute("stroke-linecap", "round");
+  g.appendChild(rightParen);
+  return g;
+}
+
+function makeStem(x, yStart, length, color) {
+  const stem = createSvgElement("line");
+  stem.setAttribute("x1", x);
+  stem.setAttribute("y1", yStart);
+  stem.setAttribute("x2", x);
+  stem.setAttribute("y2", yStart - length);
+  stem.setAttribute("stroke", color);
+  stem.setAttribute("stroke-width", 2);
+  stem.setAttribute("stroke-linecap", "round");
+  return stem;
+}
+
+function makeAccentMark(x, y, color) {
+  const accent = createSvgElement("path");
+  const w = 8;
+  const h = 4;
+  // Classic ">" accent mark
+  accent.setAttribute("d", `M ${x - w} ${y - h} L ${x + w} ${y} L ${x - w} ${y + h}`);
+  accent.setAttribute("fill", "none");
+  accent.setAttribute("stroke", color);
+  accent.setAttribute("stroke-width", 2);
+  accent.setAttribute("stroke-linecap", "round");
+  accent.setAttribute("stroke-linejoin", "round");
+  return accent;
+}
+
+function makeFlag(x, yTop, color) {
+  // 16th note flag curving to the right from top of stem
+  const flag = createSvgElement("path");
+  flag.setAttribute("d", `M ${x} ${yTop} Q ${x + 8} ${yTop + 6}, ${x + 4} ${yTop + 14}`);
+  flag.setAttribute("fill", "none");
+  flag.setAttribute("stroke", color);
+  flag.setAttribute("stroke-width", 2);
+  flag.setAttribute("stroke-linecap", "round");
+  return flag;
+}
+
+function makeStemSlash(x, yMid, color) {
+  // Small diagonal slash through stem to indicate double/roll
+  const slash = createSvgElement("line");
+  const slashLen = 10;
+  slash.setAttribute("x1", x - slashLen / 2);
+  slash.setAttribute("y1", yMid + slashLen / 2);
+  slash.setAttribute("x2", x + slashLen / 2);
+  slash.setAttribute("y2", yMid - slashLen / 2);
+  slash.setAttribute("stroke", color);
+  slash.setAttribute("stroke-width", 4); // same as beam thickness
+  slash.setAttribute("stroke-linecap", "round");
+  return slash;
+}
+
+function makeQuarterRest(x, y, color) {
+  // Quarter rest - a stylized zigzag shape
+  const rest = createSvgElement("path");
+  // Classic quarter rest shape
+  const h = 24;
+  rest.setAttribute("d", `M ${x} ${y - h/2} 
+    L ${x + 5} ${y - h/4} 
+    L ${x - 3} ${y} 
+    L ${x + 5} ${y + h/4} 
+    Q ${x - 2} ${y + h/3}, ${x + 2} ${y + h/2}`);
+  rest.setAttribute("fill", "none");
+  rest.setAttribute("stroke", color);
+  rest.setAttribute("stroke-width", 2.5);
+  rest.setAttribute("stroke-linecap", "round");
+  rest.setAttribute("stroke-linejoin", "round");
+  return rest;
+}
+
+function makeBeamRect(xStart, xEnd, yRef, thickness, color) {
+  const rect = createSvgElement("rect");
+  const x = Math.min(xStart, xEnd) - 1;
+  const width = Math.abs(xEnd - xStart) + 2;
+  rect.setAttribute("x", x);
+  rect.setAttribute("y", yRef - thickness);
+  rect.setAttribute("width", width);
+  rect.setAttribute("height", thickness);
+  rect.setAttribute("fill", color);
+  rect.setAttribute("rx", "1.5");
+  rect.setAttribute("ry", "1.5");
+  return rect;
+}
+
+function stemAnchor(rx, ry, angleRad) {
+  // Calculate stem attachment point on rotated ellipse
+  const sinA = Math.sin(angleRad);
+  const cosA = Math.cos(angleRad);
+  const t = Math.atan(-(ry * sinA) / (rx * cosA));
+  const x = rx * Math.cos(t);
+  const y = ry * Math.sin(t);
+  const X = x * cosA - y * sinA;
+  const Y = x * sinA + y * cosA;
+  return { offsetX: Math.abs(X), offsetY: Y };
+}
+
+// Render notation SVG from the pattern DSL (one cycle only).
+// Returns an SVG element.
+function renderNotationSVG(patternName, width = 1180, height = 120) {
+  // Get the base DSL for the pattern (not repeated) by extracting from pattern name or re-parsing
+  // Q/q = quarter note accent (no beam), , = quarter rest
+  const dslMap = {
+    "Single Stroke Roll": 'NnNn',
+    "Double Stroke Roll": 'DdDd',
+    "Five Stroke Roll (Right)": 'DdQ,',
+    "Five Stroke Roll (Left)": 'dDq,',
+    "Five Stroke Roll (Alternating)": 'DdQ,dDq,',
+    "Single Paradiddle": 'AnDaNd',
+    "Double Paradiddle": 'AnNnDaNnNd',
+    "Triple Paradiddle": 'AnNnNnDaNnNnNd',
+    "Flam (Right)": 'FFFF',
+    "Flam (Left)": 'ffff',
+    "Flam (Alternating)": 'FfFf',
+    "Drag (Right)": 'RRRR',
+    "Drag (Left)": 'rrrr',
+    "Drag (Alternating)": 'RrRr',
+    "Flam Tap (Right)": 'Fg.Fg.',
+    "Flam Tap (Left)": 'fG.fG.',
+    "Flam Tap (Alternating)": 'Fg.fG.',
+  };
+  const baseDsl = dslMap[patternName] || 'Nn';
+  
+  // Parse DSL to get note events
+  // Repeat the pattern to fill a full bar (16 sixteenth notes)
+  const beatMs = 200;
+  const barLength = beatMs * 16; // full bar in 4/4 with 16th notes
+  
+  // First, calculate how much time one cycle of the DSL takes
+  function calcDslTime(dslStr) {
+    let time = 0;
+    const chars = Array.from(dslStr);
+    for (let i = 0; i < chars.length; i++) {
+      const ch = chars[i];
+      const up = ch.toUpperCase();
+      if (ch === '.' || ch === ',') {
+        time += (ch === ',') ? beatMs * 2 : beatMs;
+      } else if (up === 'D') {
+        time += beatMs; // double takes 1 beat (two notes in space of one)
+      } else if (up === 'Q') {
+        time += beatMs * 2;
+      } else if (up === 'F' || up === 'R' || up === 'A' || up === 'G' || up === 'N') {
+        time += beatMs;
+      }
+    }
+    return time;
+  }
+  
+  const cycleTime = calcDslTime(baseDsl);
+  const repeatsNeeded = cycleTime > 0 ? Math.ceil(barLength / cycleTime) : 1;
+  const dsl = baseDsl.repeat(repeatsNeeded);
+  
+  const events = [];
+  let t = 0;
+  const chars = Array.from(dsl);
+  for (let i = 0; i < chars.length; i++) {
+    // Stop if we've filled the bar
+    if (t >= barLength) break;
+    
+    const ch = chars[i];
+    if (ch === '.') {
+      t += beatMs;
+      continue;
+    }
+    if (ch === ',') {
+      // Quarter rest - only add if it fits
+      if (t + beatMs * 2 <= barLength) {
+        events.push({ time: t, isRest: true, restType: 'quarter' });
+      }
+      t += beatMs * 2;
+      continue;
+    }
+    const up = ch.toUpperCase();
+    const sticking = ch === up ? 'R' : 'L';
+    
+    if (up === 'F') {
+      // Flam: grace note (small, before beat) + main note (on beat)
+      // DSL case indicates the grace note hand, main is opposite
+      // Use half the normal offset for tighter visual spacing
+      const mainSticking = sticking === 'R' ? 'L' : 'R';
+      events.push({ time: t, velocity: 'N', sticking, isGrace: true, isFlam: true });
+      events.push({ time: t + FLAM_OFFSET_MS / 2, velocity: 'N', sticking: mainSticking, isGrace: false, isFlam: true });
+      t += beatMs;
+      continue;
+    }
+    if (up === 'D') {
+      // Double: render as ONE note with slash (meaning "play twice")
+      // Takes one beat of space
+      events.push({ time: t, velocity: 'N', sticking, isDouble: true });
+      t += beatMs;
+      continue;
+    }
+    if (up === 'R') {
+      // Drag: two grace notes (opposite hand) + main note (DSL case hand)
+      // Tighter spacing: grace notes closer together and closer to main
+      const graceSticking = sticking === 'R' ? 'L' : 'R';
+      const dragGraceGap = DRAG_OFFSET_MS * 0.5; // gap between the two grace notes
+      events.push({ time: t, velocity: 'N', sticking: graceSticking, isGrace: true, isDragGrace: true, dragIdx: 0 });
+      events.push({ time: t + dragGraceGap, velocity: 'N', sticking: graceSticking, isGrace: true, isDragGrace: true, dragIdx: 1 });
+      events.push({ time: t + dragGraceGap + DRAG_OFFSET_MS / 2, velocity: 'N', sticking, isGrace: false, isDrag: true });
+      t += beatMs;
+      continue;
+    }
+    if (up === 'A') {
+      events.push({ time: t, velocity: 'A', sticking, isAccent: true });
+      t += beatMs;
+    } else if (up === 'Q') {
+      // Quarter note accent (no beam)
+      events.push({ time: t, velocity: 'A', sticking, isAccent: true, isQuarter: true });
+      t += beatMs * 2; // quarter note takes 2 beats worth of space
+    } else if (up === 'G' || up === 'N') {
+      events.push({ time: t, velocity: up, sticking });
+      t += beatMs;
+    }
+  }
+  
+  if (!events.length) return null;
+
+  const svg = makeSvg(width, height);
+  
+  // Colors for dark mode
+  const strokeColor = '#ffffff';
+  const accentColor = '#ffffff'; // white accents
+  const ghostColor = '#888888';
+  
+  const marginL = 40;
+  const marginR = 40;
+  const staffWidth = width - marginL - marginR;
+  const centerY = height / 2 + 15; // shifted down to make room for accents
+  const lineThickness = 2;
+  
+  // Draw single staff line
+  svg.appendChild(makeLine(marginL, centerY, marginL + staffWidth, centerY, lineThickness, 'rgba(255,255,255,0.4)'));
+  
+  // Draw bar lines at start and end
+  const barLineHeight = 50; // vertical extent of bar lines
+  const barLineThickness = 4; // same as beam thickness
+  const barLineTop = centerY - barLineHeight / 2;
+  const barLineBottom = centerY + barLineHeight / 2;
+  // Start bar line
+  svg.appendChild(makeLine(marginL, barLineTop, marginL, barLineBottom, barLineThickness, '#ffffff'));
+  // End bar line
+  svg.appendChild(makeLine(marginL + staffWidth, barLineTop, marginL + staffWidth, barLineBottom, barLineThickness, '#ffffff'));
+  
+  // Layout notes - use barLength for consistent spacing
+  const totalTime = barLength;
+  const spacing = staffWidth / Math.max(totalTime, beatMs);
+  
+  const headRx = 8;
+  const headRy = 5.5;
+  const graceRx = 5;
+  const graceRy = 3.5;
+  const angleRad = -25 * Math.PI / 180;
+  const minStem = 42;
+  const beamY = centerY - 58;
+  const beamThickness = 4;
+  const anchor = stemAnchor(headRx, headRy, angleRad);
+  const graceAnchor = stemAnchor(graceRx, graceRy, angleRad);
+  
+  const placed = [];
+  const dragGraceNotes = []; // collect drag grace notes for beaming
+  
+  // Padding inside the bar lines for notes
+  // We want equal visual gaps on both sides
+  // Left: gap from bar line to left edge of notehead
+  // Right: gap from stem to bar line
+  const visualGap = 45;
+  const notePadding = visualGap + headRx; // account for notehead extending left from center
+  const noteAreaWidth = staffWidth - notePadding * 2;
+  
+  // Find the time span of actual notes (first to last)
+  const noteTimes = events.filter(e => !e.isRest).map(e => e.time);
+  const maxNoteTime = noteTimes.length > 1 ? Math.max(...noteTimes) : barLength;
+  const timeSpan = maxNoteTime > 0 ? maxNoteTime : barLength;
+  
+  for (let i = 0; i < events.length; i++) {
+    const ev = events[i];
+    // Map notes so first is at left padding, last is at right padding
+    const x = marginL + notePadding + (ev.time / timeSpan) * noteAreaWidth;
+    
+    // Handle rests
+    if (ev.isRest) {
+      if (ev.restType === 'quarter') {
+        svg.appendChild(makeQuarterRest(x, centerY, strokeColor));
+      }
+      continue;
+    }
+    
+    const isGrace = ev.isGrace || false;
+    const rx = isGrace ? graceRx : headRx;
+    const ry = isGrace ? graceRy : headRy;
+    const anch = isGrace ? graceAnchor : anchor;
+    
+    // Y position: R above line, L below line
+    const y = ev.sticking === 'R' 
+      ? centerY - ry - lineThickness / 2 - 2
+      : centerY + ry + lineThickness / 2 + 2;
+    
+    // Ghost notes are only actual G velocity notes, not drag grace notes
+    const isGhostNote = ev.velocity === 'G' && !ev.isDragGrace;
+    const isAccent = ev.velocity === 'A';
+    const noteColor = isGhostNote ? ghostColor : strokeColor;
+    
+    // Draw notehead
+    const head = makeNotehead(x, y, noteColor, rx, ry, angleRad);
+    svg.appendChild(head);
+    
+    // Draw ghost parentheses (only for actual ghost notes, not drag grace notes)
+    if (isGhostNote) {
+      svg.appendChild(makeGhostParens(x, y, ry, ghostColor, 1.5));
+    }
+    
+    // Draw stem
+    const stemX = x + anch.offsetX * 0.9;
+    const stemStartY = y + anch.offsetY;
+    const stemLen = isGrace ? 20 : Math.max(minStem, stemStartY - beamY + 1);
+    const stem = makeStem(stemX, stemStartY, stemLen, noteColor);
+    svg.appendChild(stem);
+    
+    // Draw flag on flam grace notes
+    if (ev.isFlam && isGrace) {
+      svg.appendChild(makeFlag(stemX, stemStartY - stemLen, strokeColor));
+    }
+    
+    // Draw slash on double notes - at fixed Y position (like beams)
+    if (ev.isDouble) {
+      const slashY = beamY + 26; // fixed position below beams, in a straight line
+      svg.appendChild(makeStemSlash(stemX, slashY, strokeColor));
+    }
+    
+    // Collect drag grace notes for beaming
+    if (ev.isDragGrace) {
+      dragGraceNotes.push({ x, stemX, stemEndY: stemStartY - stemLen, ev });
+      // Draw beam when we have a pair
+      if (dragGraceNotes.length >= 2) {
+        const last = dragGraceNotes.length - 1;
+        const prev = dragGraceNotes[last - 1];
+        const curr = dragGraceNotes[last];
+        // Only beam if they're consecutive (same drag)
+        if (prev.ev.dragIdx === 0 && curr.ev.dragIdx === 1) {
+          svg.appendChild(makeBeamRect(prev.stemX, curr.stemX, Math.min(prev.stemEndY, curr.stemEndY), 3, strokeColor));
+        }
+      }
+    }
+    
+    // Draw accent mark (position over stem, not notehead)
+    if (isAccent) {
+      svg.appendChild(makeAccentMark(stemX, stemStartY - stemLen - 10, accentColor));
+    }
+    
+    // Draw sticking label below the staff
+    if (!isGrace) {
+      const label = makeText(x, centerY + 26, ev.sticking, '12px', 'middle', 'rgba(255,255,255,0.7)');
+      svg.appendChild(label);
+    }
+    
+    // Track for beaming (only non-grace, non-quarter notes)
+    if (!isGrace && !ev.isQuarter) {
+      placed.push({ x, stemX, stemEndY: beamY, isGrace });
+    }
+  }
+  
+  // Draw beams connecting groups of 4 notes
+  const beamGroups = [];
+  for (let i = 0; i < placed.length; i += 4) {
+    const slice = placed.slice(i, i + 4);
+    if (slice.length > 1) beamGroups.push(slice);
+  }
+  beamGroups.forEach(group => {
+    const xStart = group[0].stemX;
+    const xEnd = group[group.length - 1].stemX;
+    // Primary beam
+    svg.appendChild(makeBeamRect(xStart, xEnd, beamY, beamThickness, strokeColor));
+    // Secondary beam (for 16th notes)
+    svg.appendChild(makeBeamRect(xStart, xEnd, beamY + beamThickness + 3, beamThickness, strokeColor));
+  });
+  
+  return svg;
+}
+
+// Create or update the notation container
+function renderNotation(patternName) {
+  let container = document.getElementById('notationContainer');
+  if (!container) {
+    const canvas = document.getElementById('patternCanvas');
+    if (!canvas) return;
+    container = document.createElement('div');
+    container.id = 'notationContainer';
+    container.style.cssText = 'margin-top: 10px; background: #1a1a1a; border: 1px solid #333; border-radius: 4px; padding: 8px; overflow-x: auto;';
+    canvas.parentNode.insertBefore(container, canvas);
+  }
+  
+  // Clear previous
+  while (container.firstChild) container.removeChild(container.firstChild);
+  
+  const svg = renderNotationSVG(patternName, 1180, 120);
+  if (svg) {
+    container.appendChild(svg);
+  }
+}
+
+// ========== END NOTATION RENDERING ==========
 
 // Render a pattern (background) and a match (overlay) on the canvas.
 // pattern: array of {time, velocity, ...}
@@ -848,7 +1333,8 @@ function renderPatternMatch(pattern, match, scale, translate) {
   function drawMetricBar(label, value, minValue, maxValue, y) {
     const v = (typeof value === 'number' && isFinite(value)) ? value : maxValue;
     const clamped = Math.max(minValue, Math.min(maxValue, v));
-    const norm = Math.max(0, Math.min(1, (maxValue - clamped) / (maxValue - minValue)));
+    const linear = Math.max(0, Math.min(1, (maxValue - clamped) / (maxValue - minValue)));
+    const norm = Math.pow(linear, 0.5);
     ctx.fillStyle = '#ddd';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
@@ -862,9 +1348,9 @@ function renderPatternMatch(pattern, match, scale, translate) {
   }
 
   const DYNAMICS_BAR_MIN = 5;
-  const DYNAMICS_BAR_MAX = 50;
+  const DYNAMICS_BAR_MAX = 20;
   const TIMING_BAR_MIN = 5;
-  const TIMING_BAR_MAX = 50;
+  const TIMING_BAR_MAX = 20;
   const STICKING_BAR_MIN = 0;
   const STICKING_BAR_MAX = 5;
   drawMetricBar('Dynamics', metrics ? metrics.dynamics : null, DYNAMICS_BAR_MIN, DYNAMICS_BAR_MAX, barTop);
