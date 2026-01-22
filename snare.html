@@ -4,15 +4,16 @@
     <meta charset="UTF-8" />
     <title>Roland PD14-DSX</title>
   </head>
-  <body style="margin:0; background:#111; color:#fff; font-family:sans-serif;">
-    <h1>Roland PD-14DSX</h1>
-    <div id="status">Initializing MIDI…</div>
-    <canvas id="snareCanvas" width="1152" height="900" style="border:1px solid #333; display:block; margin-top:8px;"></canvas>
+  <body style="margin:0; background:#111; color:#fff; font-family:sans-serif; overflow:hidden;">
+    <canvas id="snareCanvas" style="display:block;"></canvas>
     <script>
       const canvas = document.getElementById('snareCanvas');
       const ctx = canvas.getContext('2d');
-      const center = { x: canvas.width / 2, y: canvas.height / 2 };
-      const maxRadius = Math.min(canvas.width, canvas.height) * 0.45;
+      let center = { x: 0, y: 0 };
+      let maxRadius = 0;
+      const barW = 24;
+      const barGap = 20;
+      const barMargin = 20;
 
       const state = {
         angleCc: 0,
@@ -23,6 +24,15 @@
         lastHit: null,
       };
 
+      function resizeCanvas() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        center = { x: canvas.width / 2, y: canvas.height / 2 };
+        const availableWidth = canvas.width - barW - barGap - barMargin * 2;
+        maxRadius = Math.min(availableWidth / 2, canvas.height * 0.45);
+        drawSnare();
+      }
+
       function drawSnare() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.strokeStyle = '#fff';
@@ -32,13 +42,22 @@
         ctx.stroke();
 
         // velocity bar (right side)
-        const barW = 24;
         const barH = maxRadius * 2;
-        const barX = center.x + maxRadius + 20;
+        const barX = center.x + maxRadius + barGap;
         const barY = center.y - maxRadius;
         ctx.strokeStyle = '#fff';
         ctx.lineWidth = 2;
         ctx.strokeRect(barX, barY, barW, barH);
+        ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+        ctx.lineWidth = 1;
+        for (let i = 0; i < 127; i++) {
+          const t = i / 126;
+          const y = barY + barH - (barH * t);
+          ctx.beginPath();
+          ctx.moveTo(barX, y);
+          ctx.lineTo(barX + 6, y);
+          ctx.stroke();
+        }
         const vNorm = Math.max(0, Math.min(1, state.velocity14 / 16383));
         const fillH = barH * vNorm;
         ctx.fillStyle = 'rgba(255, 80, 80, 0.9)';
@@ -47,7 +66,7 @@
         if (state.lastHit) {
           const slices = 8;
           const sliceAngle = (Math.PI * 2) / slices;
-          const sliceStart = state.lastHit.sliceIndex * sliceAngle - Math.PI / 2;
+          const sliceStart = state.lastHit.sliceIndex * sliceAngle - Math.PI / 2 - (sliceAngle / 2);
           const sliceEnd = sliceStart + sliceAngle;
 
           // highlight slice
@@ -118,12 +137,11 @@
         }
       });
 
-      drawSnare();
+      window.addEventListener('resize', resizeCanvas);
+      resizeCanvas();
 
       function log(msg) {
         console.log(msg);
-        const status = document.getElementById('status');
-        if (status) status.textContent = msg;
       }
 
       function handleInputsAndOutputs(midiAccess) {
