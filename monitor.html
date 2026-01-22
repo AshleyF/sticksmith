@@ -594,10 +594,13 @@ function parsePatternDSL(dsl, beatMs = 200, opts = {}) {
     const sticking = ch === up ? 'R' : 'L';
 
     if (up === 'F') {
-      // Flam: two quick normal notes within one beat (sticking from case)
-      const secondSticking = sticking === 'R' ? 'L' : 'R';
-      events.push({ time: t, velocity: 'N', sticking });
-      events.push({ time: t + FLAM_OFFSET_MS, velocity: 'N', sticking: secondSticking });
+      // Flam: two quick normal notes within one beat
+      // DSL case indicates the MAIN note hand, grace is opposite
+      // F = right-handed flam: grace L first, then main R
+      // f = left-handed flam: grace R first, then main L
+      const graceSticking = sticking === 'R' ? 'L' : 'R';
+      events.push({ time: t, velocity: 'N', sticking: graceSticking });
+      events.push({ time: t + FLAM_OFFSET_MS, velocity: 'N', sticking });
       t += beatMs;
       hitCount += 2;
       continue;
@@ -611,12 +614,15 @@ function parsePatternDSL(dsl, beatMs = 200, opts = {}) {
       continue;
     }
     if (up === 'R') {
-      // Drag: two evenly spaced ghost notes and a normal note within one beat
-      events.push({ time: t, velocity: 'G', sticking });
-      events.push({ time: t + FLAM_OFFSET_MS, velocity: 'G', sticking });
+      // Drag: two grace notes (opposite hand) + main note (DSL case hand)
+      // R = right-handed drag: grace L, L, then main R
+      // r = left-handed drag: grace R, R, then main L
+      const graceSticking = sticking === 'R' ? 'L' : 'R';
+      events.push({ time: t, velocity: 'G', sticking: graceSticking });
+      events.push({ time: t + FLAM_OFFSET_MS, velocity: 'G', sticking: graceSticking });
       events.push({ time: t + FLAM_OFFSET_MS * 2, velocity: 'N', sticking });
       t += beatMs;
-      hitCount += 2;
+      hitCount += 3;
       continue;
     }
     if (up === 'A' || up === 'G' || up === 'N') {
@@ -641,25 +647,35 @@ function parsePatternDSL(dsl, beatMs = 200, opts = {}) {
   return extended;
 }
 
-const PATTERN_LIBRARY = {
-  "Single Stroke Roll": parsePatternDSL('Nn', 256, { repeat: true }),
-  "Double Stroke Roll": parsePatternDSL('Dd', 256, { repeat: true }),
-  "Five Stroke Roll (Right)": parsePatternDSL('DdA...', 256, { repeat: true }),
-  "Five Stroke Roll (Left)": parsePatternDSL('dDa...', 256, { repeat: true }),
-  "Five Stroke Roll (Alternating)": parsePatternDSL('DdA...dDa...', 256, { repeat: true }),
-  "Single Paradiddle": parsePatternDSL('AnNNaNnn', 256, { repeat: true }),
-  "Double Paradiddle": parsePatternDSL('AnNnNNaNnNnn', 256, { repeat: true }),
-  "Triple Paradiddle": parsePatternDSL('AnNnNnNNaNnNnNnn', 256, { repeat: true }),
-  "Flam (Right)": parsePatternDSL('F', 256, { repeat: true }),
-  "Flam (Left)": parsePatternDSL('f', 256, { repeat: true }),
-  "Flam (Alternating)": parsePatternDSL('Ff', 256, { repeat: true }),
-  "Drag (Right)": parsePatternDSL('R', 256, { repeat: true }),
-  "Drag (Left)": parsePatternDSL('r', 256, { repeat: true }),
-  "Drag (Alternating)": parsePatternDSL('Rr', 256, { repeat: true }),
-  "Flam Tap (Right)": parsePatternDSL('Fg.', 256, { repeat: true }),
-  "Flam Tap (Left)": parsePatternDSL('fG.', 256, { repeat: true }),
-  "Flam Tap (Alternating)": parsePatternDSL('Fg.fG.', 256, { repeat: true }),
+// Pattern definitions - single source of truth
+// dsl: the DSL string for the pattern
+// notationDsl: optional override for notation rendering (e.g., quarter notes)
+// beats: number of quarter note beats per bar (default 4 for 4/4 time)
+const PATTERN_DEFS = {
+  "Single Stroke Roll": { dsl: 'Nn' },
+  "Double Stroke Roll": { dsl: 'Dd' },
+  "Five Stroke Roll (Right)": { dsl: 'DdA...', notationDsl: 'DdQ,' },
+  "Five Stroke Roll (Left)": { dsl: 'dDa...', notationDsl: 'dDq,' },
+  "Five Stroke Roll (Alternating)": { dsl: 'DdA...dDa...', notationDsl: 'DdQ,dDq,' },
+  "Single Paradiddle": { dsl: 'AnNNaNnn' },
+  "Double Paradiddle": { dsl: 'AnNnNNaNnNnn', beats: 3 },
+  "Triple Paradiddle": { dsl: 'AnNnNnNNaNnNnNnn' },
+  "Flam (Right)": { dsl: 'F' },
+  "Flam (Left)": { dsl: 'f' },
+  "Flam (Alternating)": { dsl: 'Ff' },
+  "Drag (Right)": { dsl: 'R' },
+  "Drag (Left)": { dsl: 'r' },
+  "Drag (Alternating)": { dsl: 'Rr' },
+  "Flam Tap (Right)": { dsl: 'Fg.' },
+  "Flam Tap (Left)": { dsl: 'fG.' },
+  "Flam Tap (Alternating)": { dsl: 'Fg.fG.' },
 };
+
+// Build PATTERN_LIBRARY from PATTERN_DEFS (for backward compatibility)
+const PATTERN_LIBRARY = {};
+for (const [name, def] of Object.entries(PATTERN_DEFS)) {
+  PATTERN_LIBRARY[name] = parsePatternDSL(def.dsl, 256, { repeat: true });
+}
 
 const DEFAULT_PATTERN_KEY = 'paradiddle';
 
@@ -915,33 +931,17 @@ function stemAnchor(rx, ry, angleRad) {
 // Render notation SVG from the pattern DSL (one cycle only).
 // Returns an SVG element.
 function renderNotationSVG(patternName, width = 1180, height = 120) {
-  // Get the base DSL for the pattern (not repeated) by extracting from pattern name or re-parsing
-  // Q/q = quarter note accent (no beam), , = quarter rest
-  const dslMap = {
-    "Single Stroke Roll": 'NnNn',
-    "Double Stroke Roll": 'DdDd',
-    "Five Stroke Roll (Right)": 'DdQ,',
-    "Five Stroke Roll (Left)": 'dDq,',
-    "Five Stroke Roll (Alternating)": 'DdQ,dDq,',
-    "Single Paradiddle": 'AnDaNd',
-    "Double Paradiddle": 'AnNnDaNnNd',
-    "Triple Paradiddle": 'AnNnNnDaNnNnNd',
-    "Flam (Right)": 'FFFF',
-    "Flam (Left)": 'ffff',
-    "Flam (Alternating)": 'FfFf',
-    "Drag (Right)": 'RRRR',
-    "Drag (Left)": 'rrrr',
-    "Drag (Alternating)": 'RrRr',
-    "Flam Tap (Right)": 'Fg.Fg.',
-    "Flam Tap (Left)": 'fG.fG.',
-    "Flam Tap (Alternating)": 'Fg.fG.',
-  };
-  const baseDsl = dslMap[patternName] || 'Nn';
+  // Get DSL from PATTERN_DEFS (single source of truth)
+  // Use notationDsl if available, otherwise use dsl
+  const def = PATTERN_DEFS[patternName];
+  const baseDsl = def ? (def.notationDsl || def.dsl) : 'Nn';
   
   // Parse DSL to get note events
-  // Repeat the pattern to fill a full bar (16 sixteenth notes)
+  // Use pattern's beats setting or default to 4 (4/4 time)
+  // beats = quarter note beats, multiply by 4 for sixteenth notes
   const beatMs = 200;
-  const barLength = beatMs * 16; // full bar in 4/4 with 16th notes
+  const quarterBeats = (def && def.beats) ? def.beats : 4;
+  const barLength = beatMs * quarterBeats * 4; // 4 sixteenths per quarter beat
   
   // First, calculate how much time one cycle of the DSL takes
   function calcDslTime(dslStr) {
@@ -963,7 +963,41 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
     return time;
   }
   
+  // Count how many main notes (for beaming) in one cycle of the DSL
+  function calcDslNoteCount(dslStr) {
+    let count = 0;
+    const chars = Array.from(dslStr);
+    for (let i = 0; i < chars.length; i++) {
+      const ch = chars[i];
+      const up = ch.toUpperCase();
+      // Count notes that will be beamed (not grace notes, not rests)
+      if (up === 'A' || up === 'G' || up === 'N' || up === 'D' || up === 'Q') {
+        count++;
+      }
+      // Flams and drags each add 1 main note (grace notes don't count for beaming)
+      if (up === 'F' || up === 'R') {
+        count++;
+      }
+    }
+    return count;
+  }
+  
+  // Count accents in DSL to determine phrase groupings
+  function calcDslAccentCount(dslStr) {
+    let count = 0;
+    const chars = Array.from(dslStr);
+    for (let i = 0; i < chars.length; i++) {
+      const ch = chars[i];
+      if (ch === 'A' || ch === 'a') {
+        count++;
+      }
+    }
+    return count;
+  }
+  
   const cycleTime = calcDslTime(baseDsl);
+  const notesPerCycle = calcDslNoteCount(baseDsl);
+  const accentsPerCycle = calcDslAccentCount(baseDsl);
   const repeatsNeeded = cycleTime > 0 ? Math.ceil(barLength / cycleTime) : 1;
   const dsl = baseDsl.repeat(repeatsNeeded);
   
@@ -992,11 +1026,14 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
     
     if (up === 'F') {
       // Flam: grace note (small, before beat) + main note (on beat)
-      // DSL case indicates the grace note hand, main is opposite
-      // Use half the normal offset for tighter visual spacing
-      const mainSticking = sticking === 'R' ? 'L' : 'R';
-      events.push({ time: t, velocity: 'N', sticking, isGrace: true, isFlam: true });
-      events.push({ time: t + FLAM_OFFSET_MS / 2, velocity: 'N', sticking: mainSticking, isGrace: false, isFlam: true });
+      // DSL case indicates the MAIN note hand, grace is opposite
+      // F = right-handed flam: grace L, main R
+      // f = left-handed flam: grace R, main L
+      // Grace note is placed BEFORE the main note time for proper visual spacing
+      const graceSticking = sticking === 'R' ? 'L' : 'R';
+      const graceOffset = FLAM_OFFSET_MS * 2.5;
+      events.push({ time: t - graceOffset, velocity: 'N', sticking: graceSticking, isGrace: true, isFlam: true, hideLabel: true });
+      events.push({ time: t, velocity: 'N', sticking, isGrace: false, isFlam: true });
       t += beatMs;
       continue;
     }
@@ -1009,12 +1046,15 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
     }
     if (up === 'R') {
       // Drag: two grace notes (opposite hand) + main note (DSL case hand)
-      // Tighter spacing: grace notes closer together and closer to main
+      // R = right-handed drag: grace L, L, then main R
+      // r = left-handed drag: grace R, R, then main L
+      // Grace notes placed well before the main note for clear separation
       const graceSticking = sticking === 'R' ? 'L' : 'R';
-      const dragGraceGap = DRAG_OFFSET_MS * 0.5; // gap between the two grace notes
-      events.push({ time: t, velocity: 'N', sticking: graceSticking, isGrace: true, isDragGrace: true, dragIdx: 0 });
-      events.push({ time: t + dragGraceGap, velocity: 'N', sticking: graceSticking, isGrace: true, isDragGrace: true, dragIdx: 1 });
-      events.push({ time: t + dragGraceGap + DRAG_OFFSET_MS / 2, velocity: 'N', sticking, isGrace: false, isDrag: true });
+      const dragGraceGap = DRAG_OFFSET_MS * 1.2; // gap between the two grace notes
+      const dragMainOffset = DRAG_OFFSET_MS * 3.5; // total offset from first grace to main note
+      events.push({ time: t - dragMainOffset, velocity: 'N', sticking: graceSticking, isGrace: true, isDragGrace: true, dragIdx: 0, hideLabel: true });
+      events.push({ time: t - dragMainOffset + dragGraceGap, velocity: 'N', sticking: graceSticking, isGrace: true, isDragGrace: true, dragIdx: 1, hideLabel: true });
+      events.push({ time: t, velocity: 'N', sticking, isGrace: false, isDrag: true });
       t += beatMs;
       continue;
     }
@@ -1166,7 +1206,7 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
     }
     
     // Draw sticking label below the staff
-    if (!isGrace) {
+    if (!isGrace && !ev.hideLabel) {
       const label = makeText(x, centerY + 26, ev.sticking, '12px', 'middle', 'rgba(255,255,255,0.7)');
       svg.appendChild(label);
     }
@@ -1177,10 +1217,16 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
     }
   }
   
-  // Draw beams connecting groups of 4 notes
+  // Draw beams connecting notes in groups
+  // If pattern has accents, group by dividing notes by number of accents (phrase grouping)
+  // Otherwise use standard grouping of 4 sixteenths per beat
+  let beamGroupSize = 4; // default
+  if (accentsPerCycle > 0 && notesPerCycle > 0) {
+    beamGroupSize = Math.floor(notesPerCycle / accentsPerCycle);
+  }
   const beamGroups = [];
-  for (let i = 0; i < placed.length; i += 4) {
-    const slice = placed.slice(i, i + 4);
+  for (let i = 0; i < placed.length; i += beamGroupSize) {
+    const slice = placed.slice(i, i + beamGroupSize);
     if (slice.length > 1) beamGroups.push(slice);
   }
   beamGroups.forEach(group => {
