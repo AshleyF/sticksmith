@@ -3,11 +3,27 @@
     <head>
         <meta charset="UTF-8">
         <title>MIDI Monitor</title>
+        <style>
+          body { margin: 0; padding: 12px; background: #111; color: #fff; font-family: sans-serif; }
+          #patternTitle { font-size: 5em; margin: 0 0 6px 0; }
+          label { color: #ddd; }
+          select, input, button { background: #222; color: #fff; border: 1px solid #444; }
+          button { cursor: pointer; }
+          #debug { color: #bbb; margin-top: 6px; }
+          #patternCanvas { background: #1a1a1a; border: 1px solid #333; }
+        </style>
     </head>
     <body>
-  <h1>MIDI Monitor</h1>
+  <h1 id="patternTitle">MIDI Monitor</h1>
   <label for="patternSelect">Pattern: </label>
   <select id="patternSelect"></select>
+  <div style="margin-top:6px; font-size:12px;">
+    <a href="snare.html" style="color:#9ad;">Open Snare Monitor</a>
+  </div>
+  <div id="tempoControls" style="margin-top:6px; font-size:12px;">
+    <label for="bpmInput">BPM: </label>
+    <input id="bpmInput" type="number" min="1" max="400" step="1" value="120" style="width:70px" />
+  </div>
   <div id="midiMap" style="margin-top:8px; font-family:sans-serif; font-size:12px;">
     <strong>Stick mapping</strong>
     <div style="margin-top:4px;">
@@ -18,17 +34,19 @@
       <label>Left notes: <input id="leftNotes" type="text" placeholder="e.g. 37, 42" style="width:180px" /></label>
       <button id="learnLeft" type="button">Learn next note</button>
     </div>
-    <div id="lastNote" style="margin-top:4px; color:#555;">Last MIDI note: --</div>
+    <div id="lastNote" style="margin-top:4px; color:#888;">Last MIDI note: --</div>
   </div>
   <div id="debug"></div>
-  <canvas id="patternCanvas" width="1125" height="300" style="border:1px solid #ddd; display:block; margin-top:6px"></canvas>
+  <canvas id="patternCanvas" width="1200" height="580" style="display:block; margin-top:10px"></canvas>
         <script>
 window._matchOrigin = performance.now();
 window._matchBuffer = [];
 window._switchPenaltyArmed = false;
 window._midiStickMap = { R: new Set(), L: new Set() };
 window._lastMidiNote = null;
+window._snareAngleCc = null;
 window._pendingStickLearn = null;
+window._bpmTarget = 120;
 const SCORE_DECAY_MS = 8000; // time constant for exponential weight and pruning
 const MAX_MATCH_BEATS = 12; // limit match buffer to most recent beats
 const STICKING_MISMATCH_BASE = 50000; // base penalty multiplier for sticking mismatches
@@ -116,6 +134,27 @@ function updateStickMapFromInputs() {
   } catch (e) {
     // ignore storage errors
   }
+}
+
+function setupTempoControls() {
+  const bpmInput = document.getElementById('bpmInput');
+  if (bpmInput) {
+    bpmInput.addEventListener('input', () => {
+      const v = Number(bpmInput.value);
+      if (isFinite(v) && v > 0) window._bpmTarget = v;
+    });
+    const v = Number(bpmInput.value);
+    if (isFinite(v) && v > 0) window._bpmTarget = v;
+  }
+}
+
+function stickingFromSnareAngle(angleCc) {
+  if (angleCc === null || angleCc === undefined) return '';
+  const sliceIndex = Math.max(0, Math.min(7, Math.floor(angleCc / 16)));
+  // 0 = up, 4 = down. Right side: 1-3, Left side: 5-7.
+  if (sliceIndex >= 1 && sliceIndex <= 3) return 'R';
+  if (sliceIndex >= 5 && sliceIndex <= 7) return 'L';
+  return '';
 }
 
 function setupStickMappingUI() {
@@ -259,6 +298,9 @@ function handleInputsAndOutputs(midiAccess) {
         } else if (type === 'controlchange') {
           console.log(`MIDI parsed: controlchange ch=${channel+1} controller=${data[1]} value=${data[2]}`);
           console.log(`CC ch${channel+1}: ${data[1]} -> ${data[2]}`);
+          if (data[1] === 80) {
+            window._snareAngleCc = data[2];
+          }
         } else if (type === 'programchange') {
           console.log(`MIDI parsed: programchange ch=${channel+1} program=${data[1]}`);
         } else {
@@ -285,6 +327,7 @@ function handleInputsAndOutputs(midiAccess) {
           let sticking = '';
           if (map.R && map.R.has(note)) sticking = 'R';
           else if (map.L && map.L.has(note)) sticking = 'L';
+          else sticking = stickingFromSnareAngle(window._snareAngleCc);
           // Use performance.now() for timing accuracy
           addMatchNoteAt(performance.now(), data2, sticking);
         }
@@ -598,15 +641,17 @@ function parsePatternDSL(dsl, beatMs = 200, opts = {}) {
 }
 
 const PATTERN_LIBRARY = {
-  "Single Stroke Roll": parsePatternDSL('Nn', 200, { repeat: true }),
-  "Double Stroke Roll": parsePatternDSL('Dd', 200, { repeat: true }),
-  "Five Stroke Roll": parsePatternDSL('DdA...', 200, { repeat: true }),
-  "Single Paradiddle": parsePatternDSL('AnDaNd', 200, { repeat: true }),
-  "Double Paradiddle": parsePatternDSL('AnNnDaNnNd', 200, { repeat: true }),
-  "Triple Paradiddle": parsePatternDSL('AnNnNnDaNnNnNd', 200, { repeat: true }),
-  "Flam": parsePatternDSL('Ff', 200, { repeat: true }),
-  "Drag": parsePatternDSL('Rr', 200, { repeat: true }),
-  "Flam Tap": parsePatternDSL('Fg.fG.', 200, { repeat: true }),
+  "Single Stroke Roll": parsePatternDSL('Nn', 256, { repeat: true }),
+  "Double Stroke Roll": parsePatternDSL('Dd', 256, { repeat: true }),
+  "Five Stroke Roll (Right)": parsePatternDSL('DdA...', 256, { repeat: true }),
+  "Five Stroke Roll (Left)": parsePatternDSL('dDa...', 256, { repeat: true }),
+  "Five Stroke Roll (Alternating)": parsePatternDSL('DdA...dDa...', 256, { repeat: true }),
+  "Single Paradiddle": parsePatternDSL('AnDaNd', 256, { repeat: true }),
+  "Double Paradiddle": parsePatternDSL('AnNnDaNnNd', 256, { repeat: true }),
+  "Triple Paradiddle": parsePatternDSL('AnNnNnDaNnNnNd', 256, { repeat: true }),
+  "Flam": parsePatternDSL('Ff', 256, { repeat: true }),
+  "Drag": parsePatternDSL('Rr', 256, { repeat: true }),
+  "Flam Tap": parsePatternDSL('Fg.fG.', 256, { repeat: true }),
 };
 
 const DEFAULT_PATTERN_KEY = 'paradiddle';
@@ -617,6 +662,9 @@ function setPattern(name, renderPatternOnly = true) {
   window._extendedPattern = pat;
   window._lastMatchedPatternIdx = null;
   window._currentPatternName = resolvedName;
+
+  const title = document.getElementById('patternTitle');
+  if (title) title.textContent = resolvedName;
 
   const select = document.getElementById('patternSelect');
   if (select && select.value !== resolvedName && PATTERN_LIBRARY[resolvedName]) {
@@ -696,7 +744,7 @@ function renderPatternMatch(pattern, match, scale, translate) {
   const ctx = canvas.getContext('2d');
   const W = canvas.width;
   const H = canvas.height;
-  const barWidth = 6;
+  const barWidth = 10;
   const halfBar = barWidth / 2;
   ctx.clearRect(0, 0, W, H);
 
@@ -705,6 +753,7 @@ function renderPatternMatch(pattern, match, scale, translate) {
   console.log('renderPatternMatch: ' + pattern.length + ' pattern notes, ' + (match ? match.length : 0) + ' match notes');
 
   const padding = 10;
+  const metricsArea = 120;
   // Render the full extended pattern
   let renderPattern = pattern;
 
@@ -721,12 +770,12 @@ function renderPatternMatch(pattern, match, scale, translate) {
   const mapX = (t) => leftPad + ((t - minTime) / timeRange) * usableWidth;
 
   // Layout vertically into two bands (pattern top, match bottom).
-  const available = H - padding * 2;
+  const available = H - padding * 2 - metricsArea;
   const bandHeight = available / 2;
   const patternBaseline = padding + bandHeight; // bottom of top band
   // Reserve a small label area under the match band so labels can be drawn
   // below the match bars without overlapping the canvas edge.
-  const labelHeight = 14; // px (approx for 12px font)
+  const labelHeight = 18; // px (approx for 16px font)
   const labelMargin = 6; // px gap between bar and label
   const matchBaseline = padding + bandHeight * 2 - (labelHeight + labelMargin); // lifted so labels fit below
 
@@ -738,7 +787,7 @@ function renderPatternMatch(pattern, match, scale, translate) {
 
   // Draw pattern bars (background) on the top band
   ctx.textAlign = 'center';
-  ctx.font = '12px sans-serif';
+  ctx.font = '16px sans-serif';
   const highlightIdx = (typeof window._lastMatchedPatternIdx === 'number') ? window._lastMatchedPatternIdx : -1;
   // Render all sticking labels across the extended pattern
   for (let i = 0; i < renderPattern.length; i++) {
@@ -746,11 +795,11 @@ function renderPatternMatch(pattern, match, scale, translate) {
     const x = mapX(p.time);
     const h = velToHeight(p.velocity);
     // gray bar for pattern (ensure it stays in the top band)
-    ctx.fillStyle = (i === highlightIdx) ? '#ff4d4d' : '#cccccc';
+    ctx.fillStyle = (i === highlightIdx) ? '#ff4d4d' : '#aaaaaa';
     ctx.fillRect(x - halfBar, patternBaseline - h, barWidth, h);
     // sticking label aligned to the top of the top band
     if (p.sticking) {
-      ctx.fillStyle = '#222';
+      ctx.fillStyle = '#e0e0e0';
       ctx.textBaseline = 'top';
       const labelY = padding + 2;
       ctx.fillText(String(p.sticking), x, labelY);
@@ -782,6 +831,62 @@ function renderPatternMatch(pattern, match, scale, translate) {
     ctx.moveTo(leftPad, H / 2);
     ctx.lineTo(W - rightPad, H / 2);
     ctx.stroke();
+  }
+
+  // Draw performance bars (dynamics/timing) in the bottom area
+  const metrics = window._lastMetrics || null;
+  const barLeft = padding;
+  const barRight = W - padding;
+  const metricsWidth = Math.max(1, barRight - barLeft);
+  const barHeight = 16;
+  const barGap = 10;
+  const barTop = padding + bandHeight * 2 + 10;
+  const textPad = 90;
+  const barStart = barLeft + textPad;
+  const barW = Math.max(1, metricsWidth - textPad);
+
+  function drawMetricBar(label, value, minValue, maxValue, y) {
+    const v = (typeof value === 'number' && isFinite(value)) ? value : maxValue;
+    const clamped = Math.max(minValue, Math.min(maxValue, v));
+    const norm = Math.max(0, Math.min(1, (maxValue - clamped) / (maxValue - minValue)));
+    ctx.fillStyle = '#ddd';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.font = '14px sans-serif';
+    ctx.fillText(label, barLeft, y + barHeight / 2);
+    ctx.strokeStyle = '#555';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(barStart, y, barW, barHeight);
+    ctx.fillStyle = 'rgba(80, 200, 120, 0.85)';
+    ctx.fillRect(barStart, y, barW * norm, barHeight);
+  }
+
+  const DYNAMICS_BAR_MIN = 5;
+  const DYNAMICS_BAR_MAX = 50;
+  const TIMING_BAR_MIN = 5;
+  const TIMING_BAR_MAX = 50;
+  const STICKING_BAR_MIN = 0;
+  const STICKING_BAR_MAX = 5;
+  drawMetricBar('Dynamics', metrics ? metrics.dynamics : null, DYNAMICS_BAR_MIN, DYNAMICS_BAR_MAX, barTop);
+  drawMetricBar('Timing', metrics ? metrics.timing : null, TIMING_BAR_MIN, TIMING_BAR_MAX, barTop + barHeight + barGap);
+  drawMetricBar('Sticking', metrics ? metrics.stickingCount : null, STICKING_BAR_MIN, STICKING_BAR_MAX, barTop + (barHeight + barGap) * 2);
+
+  if (metrics && typeof metrics.scale === 'number') {
+    const scale = metrics.scale;
+    let label = 'On time';
+    if (scale > 1.03) label = 'Rushing';
+    else if (scale < 0.97) label = 'Dragging';
+    const bpm = (window._bpmTarget || 0) * scale;
+    const y = barTop + (barHeight + barGap) * 3;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.font = '14px sans-serif';
+    ctx.fillStyle = '#ddd';
+    ctx.fillText('Feel', barLeft, y + barHeight / 2);
+    ctx.fillStyle = '#4fd97b';
+    ctx.font = 'bold 14px sans-serif';
+    const bpmText = isFinite(bpm) && bpm > 0 ? ('  ' + bpm.toFixed(1) + ' BPM') : '';
+    ctx.fillText(label + bpmText, barStart, y + barHeight / 2);
   }
 
   // (legend removed to keep the canvas area clean)
@@ -880,6 +985,7 @@ function search(pattern, match, velocityWeight, stickingWeight, opts = {}) {
   window._lastCandidates = top;
 
   const best = top[0];
+  window._lastMetrics = { dynamics: best.dynamics, timing: best.timing, stickingCount: best.stickingCount, scale: best.scale };
   best.patternName = patternName;
   if (!render) {
     return best;
@@ -896,7 +1002,7 @@ function search(pattern, match, velocityWeight, stickingWeight, opts = {}) {
     renderPatternMatch(pat, best.match, 1.0, 0);
     const dbg = document.getElementById('debug');
     if (dbg) {
-      dbg.textContent = 'Dynamics: ' + best.dynamics.toFixed(2) + ' | Timing: ' + best.timing.toFixed(2) + ' | Combined: ' + best.score.toFixed(2) + ' | Extra: ' + (best.reuseCount || 0) + ' | Missed: ' + (best.gapCount || 0) + ' | Sticking: ' + (best.stickingCount || 0) + ' | Scale: ' + best.scale.toFixed(3) + ' | Translate: ' + best.translate.toFixed(1) + (best.vscale ? (' | Vscale: ' + best.vscale.toFixed(3)) : '') + (patternName ? (' | Pattern: ' + patternName) : '');
+      dbg.textContent = 'Dynamics: ' + best.dynamics.toFixed(2) + ' | Timing: ' + best.timing.toFixed(2) + ' | Combined: ' + best.score.toFixed(2) + ' | Extra: ' + (best.reuseCount || 0) + ' | Missed: ' + (best.gapCount || 0) + ' | Sticking: ' + (best.stickingCount || 0) + ' | Scale: ' + best.scale.toFixed(3) + ' | Translate: ' + best.translate.toFixed(1) + (best.vscale ? (' | Vscale: ' + best.vscale.toFixed(3)) : '');
     }
   } catch (e) {
     console.log('Rendering failed: ' + (e && e.message ? e.message : String(e)));
@@ -937,6 +1043,7 @@ function searchAcrossPatterns(match, velocityWeight, stickingWeight) {
 populatePatternMenu();
 setPattern(DEFAULT_PATTERN_KEY);
 setupStickMappingUI();
+setupTempoControls();
 searchAcrossPatterns(diddle4, 1, 1);
 startMIDI();
 /*
