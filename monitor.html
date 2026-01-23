@@ -1125,6 +1125,7 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
   let slotsPerCycle = 0;
   let notesPerCycle = 0;
   let accentsPerCycle = 0;
+  let hitsPerCycle = 0; // number of pattern hits (for highlighting wrap-around)
   let hasTriplets = false;
   
   for (const n of def.notes) {
@@ -1138,6 +1139,11 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
     if (type !== 'rest') {
       notesPerCycle++;
       if (vel === ACCENT || vel === 'accent') accentsPerCycle++;
+      // Count hits per pattern type
+      if (type === 'note') hitsPerCycle += 1;
+      else if (type === 'double') hitsPerCycle += 2;
+      else if (type === 'flam') hitsPerCycle += 2;
+      else if (type === 'drag') hitsPerCycle += 3;
     }
   }
   
@@ -1150,8 +1156,10 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
   const repeatsNeeded = slotsPerCycle > 0 ? Math.ceil(totalSlots / slotsPerCycle) : 1;
   
   // Parse notes into events with slot positions
+  // Also track patternHitIdx to map notation elements to pattern hits
   const events = [];
   let slot = 0;
+  let patternHitIdx = 0;
   
   for (let rep = 0; rep < repeatsNeeded; rep++) {
     for (const n of def.notes) {
@@ -1180,7 +1188,8 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
           velocity: notationVel, 
           sticking: hand, 
           isAccent,
-          dur // track duration for beaming
+          dur,
+          patternHitIdx: patternHitIdx++
         });
         slot += slots;
         continue;
@@ -1188,14 +1197,19 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
       
       if (type === 'double') {
         // Double: one note with slash (takes full duration)
+        // Pattern has 2 hits: first hit, second hit
         const isAccent = vel === ACCENT || vel === 'accent';
+        const firstHit = patternHitIdx++;
+        const secondHit = patternHitIdx++;
         events.push({ 
           slot, 
           velocity: notationVel, 
           sticking: hand, 
           isDouble: true, 
           isAccent,
-          dur // track duration for beaming
+          dur,
+          patternHitIdx: firstHit,
+          patternHitIdx2: secondHit // second hit highlights the slash
         });
         slot += slots;
         continue;
@@ -1203,21 +1217,28 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
       
       if (type === 'flam') {
         // Flam: grace note (opposite hand) + main note
+        // Pattern has 2 hits: grace note, main note
         const graceHand = hand === 'R' ? 'L' : 'R';
         const isAccent = vel === ACCENT || vel === 'accent';
-        events.push({ slot, velocity: 'N', sticking: graceHand, isGrace: true, isFlam: true, hideLabel: true, graceOffset: -24 });
-        events.push({ slot, velocity: notationVel, sticking: hand, isGrace: false, isFlam: true, isAccent, dur });
+        const graceHit = patternHitIdx++;
+        const mainHit = patternHitIdx++;
+        events.push({ slot, velocity: 'N', sticking: graceHand, isGrace: true, isFlam: true, hideLabel: true, graceOffset: -24, patternHitIdx: graceHit });
+        events.push({ slot, velocity: notationVel, sticking: hand, isGrace: false, isFlam: true, isAccent, dur, patternHitIdx: mainHit });
         slot += slots;
         continue;
       }
       
       if (type === 'drag') {
         // Drag: two grace notes (opposite hand) + main note
+        // Pattern has 3 hits: grace1, grace2, main
         const graceHand = hand === 'R' ? 'L' : 'R';
         const isAccent = vel === ACCENT || vel === 'accent';
-        events.push({ slot, velocity: 'N', sticking: graceHand, isGrace: true, isDragGrace: true, dragIdx: 0, hideLabel: true, graceOffset: -38 });
-        events.push({ slot, velocity: 'N', sticking: graceHand, isGrace: true, isDragGrace: true, dragIdx: 1, hideLabel: true, graceOffset: -24 });
-        events.push({ slot, velocity: notationVel, sticking: hand, isGrace: false, isDrag: true, isAccent, dur });
+        const grace1Hit = patternHitIdx++;
+        const grace2Hit = patternHitIdx++;
+        const mainHit = patternHitIdx++;
+        events.push({ slot, velocity: 'N', sticking: graceHand, isGrace: true, isDragGrace: true, dragIdx: 0, hideLabel: true, graceOffset: -38, patternHitIdx: grace1Hit });
+        events.push({ slot, velocity: 'N', sticking: graceHand, isGrace: true, isDragGrace: true, dragIdx: 1, hideLabel: true, graceOffset: -24, patternHitIdx: grace2Hit });
+        events.push({ slot, velocity: notationVel, sticking: hand, isGrace: false, isDrag: true, isAccent, dur, patternHitIdx: mainHit });
         slot += slots;
         continue;
       }
@@ -1268,6 +1289,11 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
   const placed = [];
   const dragGraceNotes = []; // collect drag grace notes for beaming
   
+  // Build hit map for highlighting: patternHitIdx -> element IDs
+  const hitMap = {};
+  let elementIdCounter = 0;
+  const makeId = () => `note-el-${elementIdCounter++}`;
+  
   // Padding inside the bar lines for notes
   const visualGap = 45;
   const notePadding = visualGap + headRx;
@@ -1310,8 +1336,11 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
     // Ghost notes use same color as regular notes (parentheses distinguish them)
     const noteColor = strokeColor;
     
-    // Draw notehead
+    // Draw notehead and assign ID
+    const headId = makeId();
     const head = makeNotehead(x, y, noteColor, rx, ry, angleRad);
+    head.setAttribute('id', headId);
+    head.setAttribute('data-original-fill', noteColor);
     svg.appendChild(head);
     
     // Draw ghost parentheses (only for actual ghost notes, not drag grace notes)
@@ -1319,23 +1348,53 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
       svg.appendChild(makeGhostParens(x, y, ry, strokeColor, 1.5));
     }
     
-    // Draw stem
+    // Draw stem and assign ID
+    const stemId = makeId();
     const stemX = x + anch.offsetX * 0.9;
     const stemStartY = y + anch.offsetY;
     const stemLen = isGrace ? 20 : Math.max(minStem, stemStartY - beamY + 1);
     const stem = makeStem(stemX, stemStartY, stemLen, noteColor);
+    stem.setAttribute('id', stemId);
+    stem.setAttribute('data-original-stroke', noteColor);
     svg.appendChild(stem);
+    
+    // Register hit mapping for this event's pattern hit
+    if (ev.patternHitIdx !== undefined) {
+      if (!hitMap[ev.patternHitIdx]) {
+        hitMap[ev.patternHitIdx] = [];
+      }
+      hitMap[ev.patternHitIdx].push(headId, stemId);
+    }
     
     // Draw flag on flam grace notes
     if (ev.isFlam && isGrace) {
-      svg.appendChild(makeFlag(stemX, stemStartY - stemLen, strokeColor));
+      const flagId = makeId();
+      const flag = makeFlag(stemX, stemStartY - stemLen, strokeColor);
+      flag.setAttribute('id', flagId);
+      flag.setAttribute('data-original-stroke', strokeColor);
+      svg.appendChild(flag);
+      // Add flag to the hit mapping
+      if (ev.patternHitIdx !== undefined && hitMap[ev.patternHitIdx]) {
+        hitMap[ev.patternHitIdx].push(flagId);
+      }
     }
     
     // Draw slash on double notes - fixed Y position aligned across all notes
-    // Position is based on where slash would fall for a right-hand note (shorter stem)
+    // Second hit of double highlights the slash
     if (ev.isDouble) {
-      const slashY = beamY + 22; // fixed position, aligned across all doubles
-      svg.appendChild(makeStemSlash(stemX, slashY, strokeColor));
+      const slashId = makeId();
+      const slashY = beamY + 22;
+      const slash = makeStemSlash(stemX, slashY, strokeColor);
+      slash.setAttribute('id', slashId);
+      slash.setAttribute('data-original-stroke', strokeColor);
+      svg.appendChild(slash);
+      // Register slash for the second hit (patternHitIdx2)
+      if (ev.patternHitIdx2 !== undefined) {
+        if (!hitMap[ev.patternHitIdx2]) {
+          hitMap[ev.patternHitIdx2] = [];
+        }
+        hitMap[ev.patternHitIdx2].push(slashId);
+      }
     }
     
     // Collect drag grace notes for beaming
@@ -1363,6 +1422,11 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
       placed.push({ x, stemX, stemEndY: beamY, dur: ev.dur });
     }
   }
+  
+  // Store hit map and cycle length globally
+  // patternHitIdx is the total number of hits displayed in the notation bar
+  window._notationHitMap = hitMap;
+  window._notationHitsPerCycle = patternHitIdx;
   
   // Draw beams connecting notes in groups
   // Group by beat: 16ths → 4 per beat, 8ths → 2 per beat, triplets → 3 per beat
@@ -1467,6 +1531,65 @@ function renderNotation(patternName) {
 }
 
 // ========== END NOTATION RENDERING ==========
+
+// Highlight notation elements for a given pattern hit index
+// Uses modulo to wrap around if pattern repeats more than notation
+function highlightNotationHit(patternHitIdx) {
+  const hitMap = window._notationHitMap;
+  const hitsPerCycle = window._notationHitsPerCycle;
+  
+  if (!hitMap || !hitsPerCycle || patternHitIdx < 0) return;
+  
+  // Wrap around using modulo for patterns that repeat
+  const notationHitIdx = patternHitIdx % hitsPerCycle;
+  
+  // Reset all previously highlighted elements to original color
+  const container = document.getElementById('notationContainer');
+  if (!container) return;
+  
+  const highlighted = container.querySelectorAll('[data-highlighted="true"]');
+  highlighted.forEach(el => {
+    const origFill = el.getAttribute('data-original-fill');
+    const origStroke = el.getAttribute('data-original-stroke');
+    if (origFill) el.setAttribute('fill', origFill);
+    if (origStroke) el.setAttribute('stroke', origStroke);
+    el.removeAttribute('data-highlighted');
+  });
+  
+  // Highlight elements for current hit
+  const elementIds = hitMap[notationHitIdx];
+  if (!elementIds || !elementIds.length) return;
+  
+  const highlightColor = '#ff4d4d'; // red highlight
+  elementIds.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      // Check if element uses fill or stroke
+      if (el.hasAttribute('data-original-fill')) {
+        el.setAttribute('fill', highlightColor);
+      }
+      if (el.hasAttribute('data-original-stroke')) {
+        el.setAttribute('stroke', highlightColor);
+      }
+      el.setAttribute('data-highlighted', 'true');
+    }
+  });
+}
+
+// Clear all notation highlights
+function clearNotationHighlights() {
+  const container = document.getElementById('notationContainer');
+  if (!container) return;
+  
+  const highlighted = container.querySelectorAll('[data-highlighted="true"]');
+  highlighted.forEach(el => {
+    const origFill = el.getAttribute('data-original-fill');
+    const origStroke = el.getAttribute('data-original-stroke');
+    if (origFill) el.setAttribute('fill', origFill);
+    if (origStroke) el.setAttribute('stroke', origStroke);
+    el.removeAttribute('data-highlighted');
+  });
+}
 
 // Render a pattern (background) and a match (overlay) on the canvas.
 // pattern: array of {time, velocity, ...}
@@ -1631,6 +1754,14 @@ function renderPatternMatch(pattern, match, scale, translate) {
 window._lastRender = null;
 // Track last matched pattern index for progress heuristic
 window._lastMatchedPatternIdx = null;
+// Map from pattern hit index to notation SVG element IDs
+// hitMap[hitIdx] = { elements: [id1, id2, ...], subHits: [...] }
+// For single notes: elements = [headId, stemId]
+// For doubles: subHits = [[headId, stemId], [slashId]]
+// For flams: subHits = [[graceHeadId, graceStemId], [mainHeadId, mainStemId]]
+// For drags: subHits = [[grace1HeadId], [grace2HeadId], [mainHeadId, mainStemId]]
+window._notationHitMap = [];
+window._notationHitsPerCycle = 0;
 
 function search(pattern, match, velocityWeight, stickingWeight, opts = {}) {
   const { render = true, patternName = null } = opts;
@@ -1733,6 +1864,8 @@ function search(pattern, match, velocityWeight, stickingWeight, opts = {}) {
     window._lastRender = { pat: pat, match: best.match, scale: best.scale, translate: best.translate, vscale: best.vscale };
     if (best.latestIdx !== undefined && best.latestIdx >= 0) {
       window._lastMatchedPatternIdx = best.latestIdx;
+      // Highlight the corresponding notation element
+      highlightNotationHit(best.latestIdx);
     }
     renderPatternMatch(pat, best.match, 1.0, 0);
     const dbg = document.getElementById('debug');
