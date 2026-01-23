@@ -11,34 +11,52 @@
           button { cursor: pointer; }
           #debug { color: #bbb; margin-top: 6px; }
           #patternCanvas { background: #1a1a1a; border: 1px solid #333; }
+          #debugToggle { color: #666; font-size: 12px; cursor: pointer; text-decoration: none; margin-top: 10px; display: inline-block; }
+          #debugToggle:hover { color: #999; }
+          #debugSection { margin-top: 10px; padding-top: 10px; border-top: 1px solid #333; }
         </style>
     </head>
     <body>
   <h1 id="patternTitle">MIDI Monitor</h1>
-  <label for="patternSelect">Pattern: </label>
-  <select id="patternSelect"></select>
-  <div style="margin-top:6px; font-size:12px;">
-    <a href="snare.html" style="color:#9ad;">Open Snare Monitor</a>
-  </div>
-  <div id="tempoControls" style="margin-top:6px; font-size:12px;">
-    <label for="bpmInput">BPM: </label>
-    <input id="bpmInput" type="number" min="1" max="400" step="1" value="120" style="width:70px" />
-  </div>
-  <div id="midiMap" style="margin-top:8px; font-family:sans-serif; font-size:12px;">
-    <strong>Stick mapping</strong>
-    <div style="margin-top:4px;">
-      <label>Right notes: <input id="rightNotes" type="text" placeholder="e.g. 38, 40" style="width:180px" /></label>
-      <button id="learnRight" type="button">Learn next note</button>
+  <div id="notationContainer" style="margin-top: 10px; background: #1a1a1a; border: 1px solid #333; border-radius: 4px; overflow-x: auto; max-width: 1180px; box-sizing: content-box;"></div>
+  <a href="#" id="debugToggle" onclick="toggleDebugSection(); return false;">▶ Show controls</a>
+  <div id="debugSection" style="display: none;">
+    <label for="patternSelect">Pattern: </label>
+    <select id="patternSelect"></select>
+    <div style="margin-top:6px; font-size:12px;">
+      <a href="snare.html" style="color:#9ad;">Open Snare Monitor</a>
     </div>
-    <div style="margin-top:4px;">
-      <label>Left notes: <input id="leftNotes" type="text" placeholder="e.g. 37, 42" style="width:180px" /></label>
-      <button id="learnLeft" type="button">Learn next note</button>
+    <div id="tempoControls" style="margin-top:6px; font-size:12px;">
+      <label for="bpmInput">BPM: </label>
+      <input id="bpmInput" type="number" min="1" max="400" step="1" value="120" style="width:70px" />
     </div>
-    <div id="lastNote" style="margin-top:4px; color:#888;">Last MIDI note: --</div>
+    <div id="midiMap" style="margin-top:8px; font-family:sans-serif; font-size:12px;">
+      <strong>Stick mapping</strong>
+      <div style="margin-top:4px;">
+        <label>Right notes: <input id="rightNotes" type="text" placeholder="e.g. 38, 40" style="width:180px" /></label>
+        <button id="learnRight" type="button">Learn next note</button>
+      </div>
+      <div style="margin-top:4px;">
+        <label>Left notes: <input id="leftNotes" type="text" placeholder="e.g. 37, 42" style="width:180px" /></label>
+        <button id="learnLeft" type="button">Learn next note</button>
+      </div>
+      <div id="lastNote" style="margin-top:4px; color:#888;">Last MIDI note: --</div>
+    </div>
+    <div id="debug"></div>
+    <canvas id="patternCanvas" width="1180" height="260" style="display:block; margin-top:10px"></canvas>
   </div>
-  <div id="debug"></div>
-  <canvas id="patternCanvas" width="1180" height="140" style="display:block; margin-top:10px"></canvas>
         <script>
+function toggleDebugSection() {
+  const section = document.getElementById('debugSection');
+  const toggle = document.getElementById('debugToggle');
+  if (section.style.display === 'none') {
+    section.style.display = 'block';
+    toggle.textContent = '▼ Hide controls';
+  } else {
+    section.style.display = 'none';
+    toggle.textContent = '▶ Show controls';
+  }
+}
 window._matchOrigin = performance.now();
 window._matchBuffer = [];
 window._switchPenaltyArmed = false;
@@ -61,9 +79,11 @@ const PATTERN_SWITCH_PENALTY = 10; // penalty when switching away from current p
 const DISQUALIFIED_SCORE = 1e12; // large finite score used when extras/misses occur
 
 // Sticky pattern matching: once locked, don't search other patterns until a pause
-const STICKY_PAUSE_MS = 3000; // pause duration to unlock and allow global search
+const STICKY_PAUSE_MS = 2000; // pause duration to unlock and allow global search
 const STICKY_SCORE_THRESHOLD = 15; // score must be below this to lock onto a pattern
 const STICKY_MIN_NOTES = 6; // minimum notes in match before locking onto a pattern
+const STICKY_BAD_SCORE_THRESHOLD = 50; // if average score exceeds this, unlock
+const STICKY_SCORE_WINDOW_SIZE = 5; // number of recent scores to average
 const FLAM_OFFSET_MS = 60; // spacing between grace note and main note in a flam
 const DRAG_OFFSET_MS = 60; // spacing between notes in a drag
 //const TEST_TIMEOUT = 1000;
@@ -71,34 +91,58 @@ const DRAG_OFFSET_MS = 60; // spacing between notes in a drag
 // Sticky pattern state
 window._patternLocked = false; // true when we've locked onto a pattern
 window._lastNoteTime = 0; // timestamp of last note for pause detection
+window._unlockTimeout = null; // timeout handle for auto-unlock
+window._recentScores = []; // sliding window of recent scores for bad-match detection
 
-// Update the visual lock indicator (red dot)
+// Update the visual lock indicator (circle: hollow when unlocked, solid when locked)
 function updateLockIndicator() {
   let dot = document.getElementById('lockIndicator');
   if (!dot) {
     dot = document.createElement('div');
     dot.id = 'lockIndicator';
-    dot.style.cssText = 'position: fixed; top: 10px; right: 10px; width: 16px; height: 16px; border-radius: 50%; background: #cc4444; display: none; z-index: 9999;';
+    dot.style.cssText = 'position: fixed; top: 10px; right: 10px; width: 16px; height: 16px; border-radius: 50%; z-index: 9999; box-sizing: border-box;';
     document.body.appendChild(dot);
   }
-  dot.style.display = window._patternLocked ? 'block' : 'none';
+  if (window._patternLocked) {
+    dot.style.background = '#cc4444';
+    dot.style.border = 'none';
+  } else {
+    dot.style.background = 'transparent';
+    dot.style.border = '2px solid #cc4444';
+  }
+}
+
+// Centralized unlock function - resets all relevant state
+function unlockPattern(reason) {
+  if (!window._patternLocked) return;
+  window._patternLocked = false;
+  window._recentScores = [];
+  window._matchBuffer = [];
+  window._switchPenaltyArmed = false;
+  window._lastMatchedPatternIdx = undefined;
+  updateLockIndicator();
+  console.log('Pattern unlocked: ' + reason);
 }
 
 function addMatchNoteAt(nowTimeMs, velocity, sticking) {
   let t = nowTimeMs - window._matchOrigin;
+  
+  // Clear any pending unlock timeout and start a new one
+  if (window._unlockTimeout) {
+    clearTimeout(window._unlockTimeout);
+  }
+  window._unlockTimeout = setTimeout(() => {
+    unlockPattern('timeout after ' + STICKY_PAUSE_MS + 'ms of inactivity');
+  }, STICKY_PAUSE_MS);
   
   // Check for pause that should unlock pattern search
   if (window._lastNoteTime > 0) {
     const pauseMs = nowTimeMs - window._lastNoteTime;
     if (pauseMs > STICKY_PAUSE_MS) {
       // Long pause detected - unlock pattern and reset
-      window._patternLocked = false;
-      updateLockIndicator();
-      window._matchBuffer = [];
+      unlockPattern('pause detected (' + pauseMs.toFixed(0) + 'ms)');
       window._matchOrigin = nowTimeMs;
-      window._switchPenaltyArmed = false;
       t = 0;
-      console.log('Pause detected (' + pauseMs.toFixed(0) + 'ms) - pattern unlocked, searching all patterns');
     }
   }
   window._lastNoteTime = nowTimeMs;
@@ -708,11 +752,10 @@ function parsePatternJSON(notes, beatMs = 256, opts = {}) {
 
   if (!repeat || events.length === 0 || t <= 0 || hitCount <= 0) return events;
 
-  // Repeat pattern to fill match buffer with plenty of room for continuous play
-  // Need enough repeats so that as the match buffer slides forward, there's always
-  // pattern ahead to match against. Use 4x the match buffer size to be safe.
-  const minHits = MAX_MATCH_BEATS * 4;
-  const repeats = Math.max(4, Math.ceil(minHits / hitCount));
+  // Repeat pattern to cover match buffer with room for alignment
+  // With wrapping at visual cycle boundaries, 2x match buffer is sufficient
+  const minHits = MAX_MATCH_BEATS * 2;
+  const repeats = Math.max(2, Math.ceil(minHits / hitCount));
   const extended = [];
   for (let r = 0; r < repeats; r++) {
     const offset = r * t;
@@ -1664,15 +1707,16 @@ function renderPatternMatch(pattern, match, scale, translate) {
   const usableWidth = Math.max(1, W - leftPad - rightPad);
   const mapX = (t) => leftPad + ((t - minTime) / timeRange) * usableWidth;
 
-  // Layout vertically into two bands (pattern top, match bottom).
-  const available = H - padding * 2;
+  // Layout vertically into two bands (pattern top, match bottom), reserving space for metric bars.
+  const metricsAreaHeight = 120; // space for dynamics/timing/sticking/feel bars
+  const available = H - padding * 2 - metricsAreaHeight;
   const bandHeight = available / 2;
   const patternBaseline = padding + bandHeight - 2; // bottom of top band
   // Reserve a small label area under the match band so labels can be drawn
   // below the match bars without overlapping the canvas edge.
   const labelHeight = 12; // px (approx for 11px font)
   const labelMargin = 2; // px gap between bar and label
-  const matchBaseline = H - padding - labelHeight; // lifted so labels fit below
+  const matchBaseline = padding + available - labelHeight; // lifted so labels fit below
 
   // velocity -> bar height using fixed MIDI scale (0..127), not relative to observed max
   const velToHeight = (v) => {
@@ -1735,7 +1779,7 @@ function renderPatternMatch(pattern, match, scale, translate) {
   const metricsWidth = Math.max(1, barRight - barLeft);
   const barHeight = 16;
   const barGap = 10;
-  const barTop = padding + bandHeight * 2 + 10;
+  const barTop = padding + available + 15; // below the two bands
   const textPad = 90;
   const barStart = barLeft + textPad;
   const barW = Math.max(1, metricsWidth - textPad);
@@ -1859,7 +1903,21 @@ function search(pattern, match, velocityWeight, stickingWeight, opts = {}) {
           const latestIdx = mapLatestMatchToPattern(timeTranslated, pat);
           if (window._lastMatchedPatternIdx !== null && latestIdx >= 0) {
             const expected = window._lastMatchedPatternIdx + 1;
-            const diff = latestIdx - expected;
+            let diff = latestIdx - expected;
+            
+            // Handle wrapping: use the visual cycle length for wrap detection
+            // Multiple cycle boundaries exist in the extended pattern
+            const cycleLen = window._notationHitsPerCycle || pat.length;
+            const lastPosInCycle = window._lastMatchedPatternIdx % cycleLen;
+            const latestPosInCycle = latestIdx % cycleLen;
+            
+            // If we're near end of a cycle and latestIdx is near start of any cycle,
+            // treat as forward progress (wrapping)
+            if (lastPosInCycle >= cycleLen - 3 && latestPosInCycle < cycleLen / 4) {
+              // Wrapping within visual cycle - recalculate as forward progress
+              diff = latestPosInCycle + (cycleLen - lastPosInCycle - 1);
+              if (diff < 0) diff = 0; // ensure non-negative
+            }
             
             if (window._patternLocked) {
               // When locked, enforce forward progress
@@ -1909,6 +1967,22 @@ function search(pattern, match, velocityWeight, stickingWeight, opts = {}) {
 
   const best = top[0];
   window._lastMetrics = { dynamics: best.dynamics, timing: best.timing, stickingCount: best.stickingCount, scale: best.scale };
+  
+  // Track recent scores for bad-match detection when locked
+  if (window._patternLocked && render) {
+    window._recentScores.push(best.score);
+    if (window._recentScores.length > STICKY_SCORE_WINDOW_SIZE) {
+      window._recentScores.shift();
+    }
+    // Check if average score is bad enough to unlock
+    if (window._recentScores.length >= STICKY_SCORE_WINDOW_SIZE) {
+      const avgScore = window._recentScores.reduce((a, b) => a + b, 0) / window._recentScores.length;
+      if (avgScore > STICKY_BAD_SCORE_THRESHOLD) {
+        unlockPattern('bad score average (' + avgScore.toFixed(2) + ' > ' + STICKY_BAD_SCORE_THRESHOLD + ')');
+      }
+    }
+  }
+  
   best.patternName = patternName;
   if (!render) {
     return best;
@@ -1973,6 +2047,7 @@ function searchAcrossPatterns(match, velocityWeight, stickingWeight) {
   const shouldLock = match.length >= STICKY_MIN_NOTES && bestOverall.score <= STICKY_SCORE_THRESHOLD;
   if (shouldLock && !window._patternLocked) {
     window._patternLocked = true;
+    window._recentScores = []; // Clear score history on lock
     updateLockIndicator();
     console.log('Pattern LOCKED to "' + bestPatternName + '" (score: ' + bestOverall.score.toFixed(2) + ', notes: ' + match.length + ')');
   } else if (!window._patternLocked) {
@@ -1987,6 +2062,7 @@ populatePatternMenu();
 setPattern(DEFAULT_PATTERN_KEY);
 setupStickMappingUI();
 setupTempoControls();
+updateLockIndicator(); // Show initial unlocked state
 searchAcrossPatterns(diddle4, 1, 1);
 startMIDI();
 /*
