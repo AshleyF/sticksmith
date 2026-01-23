@@ -1250,6 +1250,51 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
 
   const svg = makeSvg(width, height);
   
+  // Create gradient for cursor bar (fades to transparent on edges)
+  const defs = createSvgElement('defs');
+  const gradient = createSvgElement('linearGradient');
+  gradient.setAttribute('id', 'cursorGradient');
+  gradient.setAttribute('x1', '0%');
+  gradient.setAttribute('x2', '100%');
+  const stop1 = createSvgElement('stop');
+  stop1.setAttribute('offset', '0%');
+  stop1.setAttribute('stop-color', '#cc4444');
+  stop1.setAttribute('stop-opacity', '0');
+  const stop2 = createSvgElement('stop');
+  stop2.setAttribute('offset', '40%');
+  stop2.setAttribute('stop-color', '#cc4444');
+  stop2.setAttribute('stop-opacity', '0.4');
+  const stop3 = createSvgElement('stop');
+  stop3.setAttribute('offset', '50%');
+  stop3.setAttribute('stop-color', '#cc4444');
+  stop3.setAttribute('stop-opacity', '0.5');
+  const stop4 = createSvgElement('stop');
+  stop4.setAttribute('offset', '60%');
+  stop4.setAttribute('stop-color', '#cc4444');
+  stop4.setAttribute('stop-opacity', '0.4');
+  const stop5 = createSvgElement('stop');
+  stop5.setAttribute('offset', '100%');
+  stop5.setAttribute('stop-color', '#cc4444');
+  stop5.setAttribute('stop-opacity', '0');
+  gradient.appendChild(stop1);
+  gradient.appendChild(stop2);
+  gradient.appendChild(stop3);
+  gradient.appendChild(stop4);
+  gradient.appendChild(stop5);
+  defs.appendChild(gradient);
+  svg.appendChild(defs);
+  
+  // Create cursor bar (behind everything, hidden initially)
+  const cursor = createSvgElement('rect');
+  cursor.setAttribute('id', 'notationCursor');
+  cursor.setAttribute('x', '0');
+  cursor.setAttribute('y', '0');
+  cursor.setAttribute('width', '40');
+  cursor.setAttribute('height', height);
+  cursor.setAttribute('fill', 'url(#cursorGradient)');
+  cursor.style.display = 'none';
+  svg.appendChild(cursor);
+  
   // Colors for dark mode
   const strokeColor = '#ffffff';
   const accentColor = '#ffffff'; // white accents
@@ -1289,10 +1334,8 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
   const placed = [];
   const dragGraceNotes = []; // collect drag grace notes for beaming
   
-  // Build hit map for highlighting: patternHitIdx -> element IDs
+  // Build hit map for cursor: patternHitIdx -> x position
   const hitMap = {};
-  let elementIdCounter = 0;
-  const makeId = () => `note-el-${elementIdCounter++}`;
   
   // Padding inside the bar lines for notes
   const visualGap = 45;
@@ -1336,64 +1379,40 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
     // Ghost notes use same color as regular notes (parentheses distinguish them)
     const noteColor = strokeColor;
     
-    // Draw notehead and assign ID
-    const headId = makeId();
+    // Draw notehead
     const head = makeNotehead(x, y, noteColor, rx, ry, angleRad);
-    head.setAttribute('id', headId);
-    head.setAttribute('data-original-fill', noteColor);
     svg.appendChild(head);
+    
+    // Store x position for cursor (skip second hit of doubles)
+    if (ev.patternHitIdx !== undefined && hitMap[ev.patternHitIdx] === undefined) {
+      hitMap[ev.patternHitIdx] = x;
+    }
     
     // Draw ghost parentheses (only for actual ghost notes, not drag grace notes)
     if (isGhostNote) {
       svg.appendChild(makeGhostParens(x, y, ry, strokeColor, 1.5));
     }
     
-    // Draw stem and assign ID
-    const stemId = makeId();
+    // Draw stem
     const stemX = x + anch.offsetX * 0.9;
     const stemStartY = y + anch.offsetY;
     const stemLen = isGrace ? 20 : Math.max(minStem, stemStartY - beamY + 1);
     const stem = makeStem(stemX, stemStartY, stemLen, noteColor);
-    stem.setAttribute('id', stemId);
-    stem.setAttribute('data-original-stroke', noteColor);
     svg.appendChild(stem);
-    
-    // Register hit mapping for this event's pattern hit
-    if (ev.patternHitIdx !== undefined) {
-      if (!hitMap[ev.patternHitIdx]) {
-        hitMap[ev.patternHitIdx] = [];
-      }
-      hitMap[ev.patternHitIdx].push(headId, stemId);
-    }
     
     // Draw flag on flam grace notes
     if (ev.isFlam && isGrace) {
-      const flagId = makeId();
-      const flag = makeFlag(stemX, stemStartY - stemLen, strokeColor);
-      flag.setAttribute('id', flagId);
-      flag.setAttribute('data-original-stroke', strokeColor);
-      svg.appendChild(flag);
-      // Add flag to the hit mapping
-      if (ev.patternHitIdx !== undefined && hitMap[ev.patternHitIdx]) {
-        hitMap[ev.patternHitIdx].push(flagId);
-      }
+      svg.appendChild(makeFlag(stemX, stemStartY - stemLen, strokeColor));
     }
     
     // Draw slash on double notes - fixed Y position aligned across all notes
-    // Second hit of double highlights the slash
+    // For doubles, second hit (patternHitIdx2) doesn't move cursor - set to null
     if (ev.isDouble) {
-      const slashId = makeId();
       const slashY = beamY + 22;
-      const slash = makeStemSlash(stemX, slashY, strokeColor);
-      slash.setAttribute('id', slashId);
-      slash.setAttribute('data-original-stroke', strokeColor);
-      svg.appendChild(slash);
-      // Register slash for the second hit (patternHitIdx2)
+      svg.appendChild(makeStemSlash(stemX, slashY, strokeColor));
+      // Mark second hit to be skipped by cursor
       if (ev.patternHitIdx2 !== undefined) {
-        if (!hitMap[ev.patternHitIdx2]) {
-          hitMap[ev.patternHitIdx2] = [];
-        }
-        hitMap[ev.patternHitIdx2].push(slashId);
+        hitMap[ev.patternHitIdx2] = null;
       }
     }
     
@@ -1532,7 +1551,7 @@ function renderNotation(patternName) {
 
 // ========== END NOTATION RENDERING ==========
 
-// Highlight notation elements for a given pattern hit index
+// Move notation cursor to the given pattern hit index
 // Uses modulo to wrap around if pattern repeats more than notation
 function highlightNotationHit(patternHitIdx) {
   const hitMap = window._notationHitMap;
@@ -1543,52 +1562,24 @@ function highlightNotationHit(patternHitIdx) {
   // Wrap around using modulo for patterns that repeat
   const notationHitIdx = patternHitIdx % hitsPerCycle;
   
-  // Reset all previously highlighted elements to original color
-  const container = document.getElementById('notationContainer');
-  if (!container) return;
+  // Get x position for this hit (null means skip, e.g. second hit of double)
+  const xPos = hitMap[notationHitIdx];
+  if (xPos === null || xPos === undefined) return;
   
-  const highlighted = container.querySelectorAll('[data-highlighted="true"]');
-  highlighted.forEach(el => {
-    const origFill = el.getAttribute('data-original-fill');
-    const origStroke = el.getAttribute('data-original-stroke');
-    if (origFill) el.setAttribute('fill', origFill);
-    if (origStroke) el.setAttribute('stroke', origStroke);
-    el.removeAttribute('data-highlighted');
-  });
+  // Find and move the cursor
+  const cursor = document.getElementById('notationCursor');
+  if (!cursor) return;
   
-  // Highlight elements for current hit
-  const elementIds = hitMap[notationHitIdx];
-  if (!elementIds || !elementIds.length) return;
-  
-  const highlightColor = '#ff4d4d'; // red highlight
-  elementIds.forEach(id => {
-    const el = document.getElementById(id);
-    if (el) {
-      // Check if element uses fill or stroke
-      if (el.hasAttribute('data-original-fill')) {
-        el.setAttribute('fill', highlightColor);
-      }
-      if (el.hasAttribute('data-original-stroke')) {
-        el.setAttribute('stroke', highlightColor);
-      }
-      el.setAttribute('data-highlighted', 'true');
-    }
-  });
+  cursor.setAttribute('x', xPos - 20); // center the 40px wide cursor
+  cursor.style.display = 'block';
 }
 
-// Clear all notation highlights
+// Hide the notation cursor
 function clearNotationHighlights() {
-  const container = document.getElementById('notationContainer');
-  if (!container) return;
-  
-  const highlighted = container.querySelectorAll('[data-highlighted="true"]');
-  highlighted.forEach(el => {
-    const origFill = el.getAttribute('data-original-fill');
-    const origStroke = el.getAttribute('data-original-stroke');
-    if (origFill) el.setAttribute('fill', origFill);
-    if (origStroke) el.setAttribute('stroke', origStroke);
-    el.removeAttribute('data-highlighted');
-  });
+  const cursor = document.getElementById('notationCursor');
+  if (cursor) {
+    cursor.style.display = 'none';
+  }
 }
 
 // Render a pattern (background) and a match (overlay) on the canvas.
@@ -1754,12 +1745,8 @@ function renderPatternMatch(pattern, match, scale, translate) {
 window._lastRender = null;
 // Track last matched pattern index for progress heuristic
 window._lastMatchedPatternIdx = null;
-// Map from pattern hit index to notation SVG element IDs
-// hitMap[hitIdx] = { elements: [id1, id2, ...], subHits: [...] }
-// For single notes: elements = [headId, stemId]
-// For doubles: subHits = [[headId, stemId], [slashId]]
-// For flams: subHits = [[graceHeadId, graceStemId], [mainHeadId, mainStemId]]
-// For drags: subHits = [[grace1HeadId], [grace2HeadId], [mainHeadId, mainStemId]]
+// Map from pattern hit index to x-position for cursor
+// hitMap[hitIdx] = x position (or null to skip, e.g. second hit of double)
 window._notationHitMap = [];
 window._notationHitsPerCycle = 0;
 
