@@ -48,20 +48,61 @@ window._snareAngleCc = null;
 window._pendingStickLearn = null;
 window._bpmTarget = 120;
 const SCORE_DECAY_MS = 8000; // time constant for exponential weight and pruning
-const MAX_MATCH_BEATS = 12; // limit match buffer to most recent beats
+const MAX_MATCH_BEATS = 16; // limit match buffer to most recent beats
 const STICKING_MISMATCH_BASE = 50000; // base penalty multiplier for sticking mismatches
 const NOTE_AGE_CUTOFF_MS = 8000; // discard notes older than this relative to end
 const MATCH_RESET_GAP_MS = 3000; // reset match if there's a long pause between hits
 const TOP_CANDIDATES = 10; // number of best candidates to keep
 const PROGRESS_PENALTY = 20; // penalty if latest note does not advance to expected pattern beat
-const PATTERN_SWITCH_PENALTY = 10; // penalty when switching away from current pattern
+const LOCKED_BACKWARD_PENALTY = 10000; // essentially disqualify going backward when locked
+const LOCKED_JUMP_PENALTY_PER_NOTE = 100; // penalty per note skipped when jumping forward while locked
+const LOCKED_JITTER_TOLERANCE = 2; // allow this many notes of jitter around expected position
+const PATTERN_SWITCH_PENALTY = 10; // penalty when switching away from current pattern (legacy, kept for reference)
 const DISQUALIFIED_SCORE = 1e12; // large finite score used when extras/misses occur
+
+// Sticky pattern matching: once locked, don't search other patterns until a pause
+const STICKY_PAUSE_MS = 3000; // pause duration to unlock and allow global search
+const STICKY_SCORE_THRESHOLD = 15; // score must be below this to lock onto a pattern
+const STICKY_MIN_NOTES = 6; // minimum notes in match before locking onto a pattern
 const FLAM_OFFSET_MS = 60; // spacing between grace note and main note in a flam
 const DRAG_OFFSET_MS = 60; // spacing between notes in a drag
 //const TEST_TIMEOUT = 1000;
 
+// Sticky pattern state
+window._patternLocked = false; // true when we've locked onto a pattern
+window._lastNoteTime = 0; // timestamp of last note for pause detection
+
+// Update the visual lock indicator (red dot)
+function updateLockIndicator() {
+  let dot = document.getElementById('lockIndicator');
+  if (!dot) {
+    dot = document.createElement('div');
+    dot.id = 'lockIndicator';
+    dot.style.cssText = 'position: fixed; top: 10px; right: 10px; width: 16px; height: 16px; border-radius: 50%; background: #cc4444; display: none; z-index: 9999;';
+    document.body.appendChild(dot);
+  }
+  dot.style.display = window._patternLocked ? 'block' : 'none';
+}
+
 function addMatchNoteAt(nowTimeMs, velocity, sticking) {
   let t = nowTimeMs - window._matchOrigin;
+  
+  // Check for pause that should unlock pattern search
+  if (window._lastNoteTime > 0) {
+    const pauseMs = nowTimeMs - window._lastNoteTime;
+    if (pauseMs > STICKY_PAUSE_MS) {
+      // Long pause detected - unlock pattern and reset
+      window._patternLocked = false;
+      updateLockIndicator();
+      window._matchBuffer = [];
+      window._matchOrigin = nowTimeMs;
+      window._switchPenaltyArmed = false;
+      t = 0;
+      console.log('Pause detected (' + pauseMs.toFixed(0) + 'ms) - pattern unlocked, searching all patterns');
+    }
+  }
+  window._lastNoteTime = nowTimeMs;
+  
   if (window._matchBuffer.length > 0) {
     const lastTime = window._matchBuffer[window._matchBuffer.length - 1].time;
     const gapMs = t - lastTime;
@@ -667,9 +708,11 @@ function parsePatternJSON(notes, beatMs = 256, opts = {}) {
 
   if (!repeat || events.length === 0 || t <= 0 || hitCount <= 0) return events;
 
-  // Repeat pattern to fill match buffer
-  const minHits = MAX_MATCH_BEATS * 2;
-  const repeats = Math.max(2, Math.ceil(minHits / hitCount));
+  // Repeat pattern to fill match buffer with plenty of room for continuous play
+  // Need enough repeats so that as the match buffer slides forward, there's always
+  // pattern ahead to match against. Use 4x the match buffer size to be safe.
+  const minHits = MAX_MATCH_BEATS * 4;
+  const repeats = Math.max(4, Math.ceil(minHits / hitCount));
   const extended = [];
   for (let r = 0; r < repeats; r++) {
     const offset = r * t;
@@ -845,11 +888,15 @@ for (const [name, def] of Object.entries(PATTERN_DEFS)) {
 
 const DEFAULT_PATTERN_KEY = 'paradiddle';
 
-function setPattern(name, renderPatternOnly = true) {
+function setPattern(name, renderPatternOnly = true, preserveProgress = false) {
   const resolvedName = PATTERN_LIBRARY[name] ? name : DEFAULT_PATTERN_KEY;
   const pat = PATTERN_LIBRARY[resolvedName] || PATTERN_LIBRARY[DEFAULT_PATTERN_KEY];
   window._extendedPattern = pat;
-  window._lastMatchedPatternIdx = null;
+  
+  // Only reset progress if switching to a different pattern and not preserving
+  if (!preserveProgress || window._currentPatternName !== resolvedName) {
+    window._lastMatchedPatternIdx = null;
+  }
   window._currentPatternName = resolvedName;
 
   const title = document.getElementById('patternTitle');
@@ -1812,8 +1859,31 @@ function search(pattern, match, velocityWeight, stickingWeight, opts = {}) {
           const latestIdx = mapLatestMatchToPattern(timeTranslated, pat);
           if (window._lastMatchedPatternIdx !== null && latestIdx >= 0) {
             const expected = window._lastMatchedPatternIdx + 1;
-            if (latestIdx !== expected) {
-              finalScore += PROGRESS_PENALTY;
+            const diff = latestIdx - expected;
+            
+            if (window._patternLocked) {
+              // When locked, enforce forward progress
+              if (diff < -LOCKED_JITTER_TOLERANCE) {
+                // Going backward beyond jitter tolerance - skip entirely
+                continue;
+              } else if (diff < 0) {
+                // Going backward within tolerance - heavy penalty to discourage
+                finalScore += Math.abs(diff) * 200;
+              } else if (diff === 0) {
+                // Exactly expected - small bonus
+                finalScore -= 5;
+              } else if (diff <= LOCKED_JITTER_TOLERANCE) {
+                // Small forward jump (1-2 notes) - slight penalty
+                finalScore += diff * 10;
+              } else {
+                // Large forward jump - bigger penalty
+                finalScore += (diff - LOCKED_JITTER_TOLERANCE) * LOCKED_JUMP_PENALTY_PER_NOTE + LOCKED_JITTER_TOLERANCE * 10;
+              }
+            } else {
+              // Not locked - use lighter penalty
+              if (latestIdx !== expected) {
+                finalScore += PROGRESS_PENALTY;
+              }
             }
           }
           candidates.push({ score: finalScore, dynamics: sc.dynamics, timing: sc.timing, reuseCount: sc.reuseCount, gapCount: sc.gapCount, stickingCount: sc.stickingCount, latestIdx, scale, translate, vscale, match: scaledVelMatch });
@@ -1868,19 +1938,26 @@ function search(pattern, match, velocityWeight, stickingWeight, opts = {}) {
 // Search all patterns in the library and auto-select the best-scoring pattern.
 function searchAcrossPatterns(match, velocityWeight, stickingWeight) {
   if (!match || !match.length) return;
+  
+  const currentName = window._currentPatternName || null;
+  
+  // If pattern is locked, only search the current pattern
+  if (window._patternLocked && currentName && PATTERN_LIBRARY[currentName]) {
+    console.log('Pattern locked to "' + currentName + '" - skipping global search');
+    search(PATTERN_LIBRARY[currentName], match, velocityWeight, stickingWeight, { render: true, patternName: currentName });
+    return;
+  }
+  
+  // Global search across all patterns
   let bestOverall = null;
   let bestPatternName = null;
   let bestOverallScore = Number.MAX_VALUE;
-  const currentName = window._currentPatternName || null;
-  const allowPenalty = window._switchPenaltyArmed === true;
 
   for (const [name, pat] of Object.entries(PATTERN_LIBRARY)) {
     const result = search(pat, match, velocityWeight, stickingWeight, { render: false, patternName: name });
     if (!result) continue;
-    const switchPenalty = (allowPenalty && currentName && name !== currentName) ? PATTERN_SWITCH_PENALTY : 0;
-    const effectiveScore = result.score + switchPenalty;
-    if (effectiveScore < bestOverallScore) {
-      bestOverallScore = effectiveScore;
+    if (result.score < bestOverallScore) {
+      bestOverallScore = result.score;
       bestOverall = result;
       bestPatternName = name;
     }
@@ -1888,8 +1965,19 @@ function searchAcrossPatterns(match, velocityWeight, stickingWeight) {
 
   if (!bestOverall || !bestPatternName) return;
 
-  // Switch to the winning pattern (render pattern only)
-  setPattern(bestPatternName, true);
+  // Switch to the winning pattern - preserve progress if staying on same pattern
+  const samePattern = bestPatternName === currentName;
+  setPattern(bestPatternName, true, samePattern);
+
+  // Check if we should lock onto this pattern
+  const shouldLock = match.length >= STICKY_MIN_NOTES && bestOverall.score <= STICKY_SCORE_THRESHOLD;
+  if (shouldLock && !window._patternLocked) {
+    window._patternLocked = true;
+    updateLockIndicator();
+    console.log('Pattern LOCKED to "' + bestPatternName + '" (score: ' + bestOverall.score.toFixed(2) + ', notes: ' + match.length + ')');
+  } else if (!window._patternLocked) {
+    console.log('Pattern not yet locked (score: ' + bestOverall.score.toFixed(2) + ', notes: ' + match.length + ', need score <= ' + STICKY_SCORE_THRESHOLD + ' and notes >= ' + STICKY_MIN_NOTES + ')');
+  }
 
   // Render and log using the winning pattern; re-run search for side effects/state updates
   search(PATTERN_LIBRARY[bestPatternName], match, velocityWeight, stickingWeight, { render: true, patternName: bestPatternName });
