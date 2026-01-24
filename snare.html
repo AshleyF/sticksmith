@@ -24,6 +24,17 @@
         lastHit: null,
       };
 
+      // MIDI batch tracking - collects note on + CCs + note off
+      const midiBatch = {
+        collecting: false,
+        noteOn: null,
+        ccs: [],
+        noteOff: null,
+      };
+      
+      // Last completed batch for display
+      let lastBatch = null;
+
       function resizeCanvas() {
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight;
@@ -83,6 +94,78 @@
           ctx.beginPath();
           ctx.arc(center.x, center.y, state.lastHit.radius, sliceStart, sliceEnd);
           ctx.stroke();
+        }
+        
+        // Draw MIDI batch display on the left side
+        drawMidiBatch();
+      }
+      
+      function drawMidiBatch() {
+        if (!lastBatch) return;
+        
+        const fontSize = 24;
+        const lineHeight = 32;
+        const padding = 20;
+        const leftX = padding;
+        let y = center.y - maxRadius;
+        
+        ctx.font = `bold ${fontSize}px monospace`;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        
+        // Title
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.fillText('Last MIDI Batch', leftX, y);
+        y += lineHeight + 8;
+        
+        // Note On
+        if (lastBatch.noteOn) {
+          const { note, velocity, channel } = lastBatch.noteOn;
+          ctx.fillStyle = 'rgba(100, 255, 100, 0.9)';
+          ctx.fillText(`Note On`, leftX, y);
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+          ctx.fillText(`        ch${channel} note=${note} vel=${velocity}`, leftX, y);
+          y += lineHeight;
+        }
+        
+        // CCs
+        for (const cc of lastBatch.ccs) {
+          const { controller, value, channel } = cc;
+          const ccName = getCcName(controller);
+          ctx.fillStyle = 'rgba(100, 170, 255, 0.9)';
+          ctx.fillText(`CC ${controller.toString().padStart(2)}`, leftX, y);
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+          ctx.fillText(`       ch${channel} ${ccName} = ${value}`, leftX, y);
+          y += lineHeight;
+        }
+        
+        // Note Off
+        if (lastBatch.noteOff) {
+          const { note, velocity, channel } = lastBatch.noteOff;
+          ctx.fillStyle = 'rgba(255, 100, 100, 0.9)';
+          ctx.fillText(`Note Off`, leftX, y);
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+          ctx.fillText(`         ch${channel} note=${note} vel=${velocity}`, leftX, y);
+          y += lineHeight;
+        }
+        
+        // Computed values
+        y += 8;
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.fillText('Computed', leftX, y);
+        y += lineHeight;
+        ctx.fillStyle = 'rgba(255, 200, 100, 0.9)';
+        ctx.fillText(`Velocity 14-bit: ${state.velocity14}`, leftX, y);
+        y += lineHeight;
+        ctx.fillText(`Angle: ${state.angleCc}  Radius: ${state.radiusCc}`, leftX, y);
+      }
+      
+      function getCcName(cc) {
+        switch (cc) {
+          case 16: return 'radius';
+          case 80: return 'angle';
+          case 88: return 'vel LSB';
+          default: return '';
         }
       }
 
@@ -160,19 +243,41 @@
             const data1 = data[1];
             const data2 = data[2];
 
-            if (cmd === 0x90 || cmd === 0x80) {
-              const type = cmd === 0x90 ? 'noteon' : 'noteoff';
-              console.log(`NOTE ${type} ch=${channel + 1} note=${data1} vel=${data2}`);
-              if (cmd === 0x90 && data2 > 0) {
-                state.velocityMsb = data2;
-                state.velocity14 = (state.velocityMsb << 7) | (state.velocityLsb & 0x7f);
-                updateHitFromCc();
-              }
+            if (cmd === 0x90 && data2 > 0) {
+              // Note On - start collecting a new batch
+              console.log(`NOTE noteon ch=${channel + 1} note=${data1} vel=${data2}`);
+              midiBatch.collecting = true;
+              midiBatch.noteOn = { note: data1, velocity: data2, channel: channel + 1 };
+              midiBatch.ccs = [];
+              midiBatch.noteOff = null;
+              
+              state.velocityMsb = data2;
+              state.velocity14 = (state.velocityMsb << 7) | (state.velocityLsb & 0x7f);
+              updateHitFromCc();
+            } else if (cmd === 0x90 && data2 === 0 || cmd === 0x80) {
+              // Note Off - complete the batch
+              console.log(`NOTE noteoff ch=${channel + 1} note=${data1} vel=${data2}`);
+              midiBatch.noteOff = { note: data1, velocity: data2, channel: channel + 1 };
+              midiBatch.collecting = false;
+              
+              // Save completed batch for display
+              lastBatch = {
+                noteOn: midiBatch.noteOn,
+                ccs: [...midiBatch.ccs],
+                noteOff: midiBatch.noteOff
+              };
+              drawSnare();
             } else if (cmd === 0xb0) {
+              // CC message
               console.log(`CC ch${channel + 1}: ${data1} -> ${data2}`);
               if (data1 === 80) state.angleCc = data2;
               if (data1 === 16) state.radiusCc = data2;
               if (data1 === 88) state.velocityLsb = data2;
+              
+              // Add to current batch if collecting
+              if (midiBatch.collecting) {
+                midiBatch.ccs.push({ controller: data1, value: data2, channel: channel + 1 });
+              }
             } else {
               console.log(`MIDI cmd=0x${cmd.toString(16)} ch=${channel + 1} raw=[${Array.from(data).join(',')}]`);
             }
