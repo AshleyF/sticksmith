@@ -93,8 +93,10 @@ window._patternLocked = false; // true when we've locked onto a pattern
 window._lastNoteTime = 0; // timestamp of last note for pause detection
 window._unlockTimeout = null; // timeout handle for auto-unlock
 window._recentScores = []; // sliding window of recent scores for bad-match detection
+window._currentBPM = null; // computed BPM from pattern matching
 
 // Update the visual lock indicator (circle: hollow when unlocked, solid when locked)
+// Also updates the BPM display next to it
 function updateLockIndicator() {
   let dot = document.getElementById('lockIndicator');
   if (!dot) {
@@ -109,6 +111,21 @@ function updateLockIndicator() {
   } else {
     dot.style.background = 'transparent';
     dot.style.border = '2px solid #cc4444';
+  }
+  
+  // Update BPM display
+  let bpmLabel = document.getElementById('bpmDisplay');
+  if (!bpmLabel) {
+    bpmLabel = document.createElement('div');
+    bpmLabel.id = 'bpmDisplay';
+    bpmLabel.style.cssText = 'position: fixed; top: 10px; right: 34px; font-size: 14px; font-family: sans-serif; color: #cc4444; z-index: 9999;';
+    document.body.appendChild(bpmLabel);
+  }
+  const bpm = window._currentBPM;
+  if (bpm && isFinite(bpm) && bpm > 0) {
+    bpmLabel.textContent = 'BPM ' + Math.round(bpm);
+  } else {
+    bpmLabel.textContent = '';
   }
 }
 
@@ -921,6 +938,22 @@ const PATTERN_DEFS = {
       { type: 'note', hand: R, dur: 8 },
     ]
   },
+  "Down-Up-Tap Triplets": {
+    notes: [
+      { type: 'note', hand: R, dur: 12, vel: ACCENT, label: 'D' },
+      { type: 'note', hand: L, dur: 12, label: 'U' },
+      { type: 'note', hand: R, dur: 12, label: 'T' },
+      { type: 'note', hand: L, dur: 12, vel: ACCENT, label: 'D' },
+      { type: 'note', hand: R, dur: 12, label: 'U' },
+      { type: 'note', hand: L, dur: 12, label: 'T' },
+      { type: 'note', hand: R, dur: 12, vel: ACCENT, label: 'D' },
+      { type: 'note', hand: L, dur: 12, label: 'U' },
+      { type: 'note', hand: R, dur: 12, label: 'T' },
+      { type: 'note', hand: L, dur: 12, vel: ACCENT, label: 'D' },
+      { type: 'note', hand: R, dur: 12, label: 'U' },
+      { type: 'note', hand: L, dur: 12, label: 'T' },
+    ]
+  },
 };
 
 // Build PATTERN_LIBRARY from PATTERN_DEFS
@@ -1279,6 +1312,7 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
           sticking: hand, 
           isAccent,
           dur,
+          label: n.label || null,
           patternHitIdx: patternHitIdx++
         });
         slot += slots;
@@ -1298,6 +1332,7 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
           isDouble: true, 
           isAccent,
           dur,
+          label: n.label || null,
           patternHitIdx: firstHit,
           patternHitIdx2: secondHit // second hit highlights the slash
         });
@@ -1393,7 +1428,7 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
   const marginL = 40;
   const marginR = 40;
   const staffWidth = width - marginL - marginR;
-  const centerY = height / 2 + 20; // shifted down to make room for accents
+  const centerY = height / 2 + 30; // shifted down to make room for labels above
   const lineThickness = 2;
   
   // Draw single staff line
@@ -1409,6 +1444,19 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
   // End bar line
   svg.appendChild(makeLine(marginL + staffWidth, barLineTop, marginL + staffWidth, barLineBottom, barLineThickness, '#ffffff'));
   
+  // Add R/L labels to the left of the start bar line (R below, L above)
+  // Font size spans roughly half the bar line height for each letter
+  const rlFontSize = '20px';
+  const labelX = marginL - 16;
+  const labelOffset = 14; // equal offset above/below for symmetry
+  const labelBaselineShift = 4; // adjust for visual centering
+  const labelL = makeText(labelX, centerY - labelOffset + labelBaselineShift, 'L', rlFontSize, 'middle', '#ffffff');
+  labelL.setAttribute('font-weight', 'bold');
+  svg.appendChild(labelL);
+  const labelR = makeText(labelX, centerY + labelOffset + labelBaselineShift, 'R', rlFontSize, 'middle', '#ffffff');
+  labelR.setAttribute('font-weight', 'bold');
+  svg.appendChild(labelR);
+  
   const headRx = 8;
   const headRy = 5.5;
   const graceRx = 5;
@@ -1418,6 +1466,8 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
   const beamY = centerY - 54; // top of beams
   const beamThickness = 4;
   const accentOffset = 16; // space above stem for accent marks
+  // Fixed Y position for note labels - above everything (beams, accents, triplet markers)
+  const noteLabelY = beamY - 38;
   const anchor = stemAnchor(headRx, headRy, angleRad);
   const graceAnchor = stemAnchor(graceRx, graceRy, angleRad);
   
@@ -1458,10 +1508,10 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
     const ry = isGrace ? graceRy : headRy;
     const anch = isGrace ? graceAnchor : anchor;
     
-    // Y position: R above line, L below line
+    // Y position: R below line, L above line
     const y = ev.sticking === 'R' 
-      ? centerY - ry - lineThickness / 2 - 2
-      : centerY + ry + lineThickness / 2 + 2;
+      ? centerY + ry + lineThickness / 2 + 2
+      : centerY - ry - lineThickness / 2 - 2;
     
     // Ghost notes are only actual G velocity notes, not drag grace notes
     const isGhostNote = ev.velocity === 'G' && !ev.isDragGrace;
@@ -1524,6 +1574,12 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
     // Draw accent mark centered over notehead
     if (isAccent) {
       svg.appendChild(makeAccentMark(x, stemStartY - stemLen - accentOffset, accentColor));
+    }
+    
+    // Draw label above the note at fixed Y position (above everything), centered over stem
+    if (ev.label && !isGrace) {
+      const labelText = makeText(stemX, noteLabelY, ev.label, rlFontSize, 'middle', '#ffffff');
+      svg.appendChild(labelText);
     }
     
     // Track for beaming (only non-grace notes that can be beamed)
@@ -1608,7 +1664,7 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
       if (hasTriplets && group.length >= 2) {
         const xMid = (xStart + xEnd) / 2;
         const tripletY = beamY - 12; // above the beam
-        const tripletLabel = makeText(xMid, tripletY, '3', '12px', 'middle', strokeColor);
+        const tripletLabel = makeText(xMid, tripletY, '3', '18px', 'middle', strokeColor);
         tripletLabel.setAttribute('font-weight', 'bold');
         svg.appendChild(tripletLabel);
       }
@@ -1633,7 +1689,7 @@ function renderNotation(patternName) {
   // Clear previous
   while (container.firstChild) container.removeChild(container.firstChild);
   
-  const svg = renderNotationSVG(patternName, 1180, 140);
+  const svg = renderNotationSVG(patternName, 1180, 170);
   if (svg) {
     container.appendChild(svg);
   }
@@ -1967,6 +2023,13 @@ function search(pattern, match, velocityWeight, stickingWeight, opts = {}) {
 
   const best = top[0];
   window._lastMetrics = { dynamics: best.dynamics, timing: best.timing, stickingCount: best.stickingCount, scale: best.scale };
+  
+  // Compute BPM from scale: actual BPM = target BPM * scale
+  // Scale > 1 means user plays faster than pattern, scale < 1 means slower
+  if (typeof best.scale === 'number' && isFinite(best.scale) && best.scale > 0) {
+    window._currentBPM = (window._bpmTarget || 120) * best.scale;
+    updateLockIndicator(); // refresh BPM display
+  }
   
   // Track recent scores for bad-match detection when locked
   if (window._patternLocked && render) {
