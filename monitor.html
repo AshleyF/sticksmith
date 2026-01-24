@@ -95,6 +95,17 @@ window._unlockTimeout = null; // timeout handle for auto-unlock
 window._recentScores = []; // sliding window of recent scores for bad-match detection
 window._currentBPM = null; // computed BPM from pattern matching
 
+// Timing error tracking for visual feedback
+const TIMING_DEAD_ZONE_MS = 25; // timing error within this range is considered "good" (no indicator)
+
+// Dynamics thresholds for error detection (as fraction of velocity range)
+// Velocities are scaled 32-127 range. Keyboard normal=64, ghost=32, accent=127.
+// Accent miss: played velocity < this fraction of max (127)
+const DYNAMICS_ACCENT_THRESHOLD = 0.6; // accent needs to be > 60% of max velocity (~76)
+// Ghost miss: played velocity > this fraction of max (127)  
+const DYNAMICS_GHOST_THRESHOLD = 0.4; // ghost needs to be < 40% of max velocity (~51)
+window._noteErrors = {}; // map from notation hit index to error info: { type: 'rush'|'drag'|'miss', offsetRatio: number }
+
 // Update the visual lock indicator (circle: hollow when unlocked, solid when locked)
 // Also updates the BPM display next to it
 function updateLockIndicator() {
@@ -137,6 +148,7 @@ function unlockPattern(reason) {
   window._matchBuffer = [];
   window._switchPenaltyArmed = false;
   window._lastMatchedPatternIdx = undefined;
+  window._noteErrors = {}; // clear timing errors on unlock
   updateLockIndicator();
   console.log('Pattern unlocked: ' + reason);
 }
@@ -303,7 +315,7 @@ function setupStickMappingUI() {
 }
 
 // Keyboard test input
-// Right-hand sticking: E = normal, N = ghost, I = accent
+// Right-hand sticking: E = normal, I = ghost, N = accent
 // Left-hand sticking:  S = normal, R = ghost, T = accent
 window.addEventListener('keydown', (evt) => {
   const key = (evt.key || '').toLowerCase();
@@ -972,6 +984,7 @@ function setPattern(name, renderPatternOnly = true, preserveProgress = false) {
   // Only reset progress if switching to a different pattern and not preserving
   if (!preserveProgress || window._currentPatternName !== resolvedName) {
     window._lastMatchedPatternIdx = null;
+    window._noteErrors = {}; // clear timing errors when pattern changes
   }
   window._currentPatternName = resolvedName;
 
@@ -1306,6 +1319,7 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
       
       if (type === 'note') {
         const isAccent = vel === ACCENT || vel === 'accent';
+        const hitIdx = patternHitIdx++;
         events.push({ 
           slot, 
           velocity: notationVel, 
@@ -1313,7 +1327,8 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
           isAccent,
           dur,
           label: n.label || null,
-          patternHitIdx: patternHitIdx++
+          patternHitIdx: hitIdx,
+          errorAnchorIdx: hitIdx // regular notes anchor to themselves
         });
         slot += slots;
         continue;
@@ -1321,7 +1336,7 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
       
       if (type === 'double') {
         // Double: one note with slash (takes full duration)
-        // Pattern has 2 hits: first hit, second hit
+        // Pattern has 2 hits: first hit, second hit - both anchor to first for errors
         const isAccent = vel === ACCENT || vel === 'accent';
         const firstHit = patternHitIdx++;
         const secondHit = patternHitIdx++;
@@ -1334,7 +1349,8 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
           dur,
           label: n.label || null,
           patternHitIdx: firstHit,
-          patternHitIdx2: secondHit // second hit highlights the slash
+          patternHitIdx2: secondHit,
+          errorAnchorIdx: firstHit // both hits anchor to main note for errors
         });
         slot += slots;
         continue;
@@ -1342,28 +1358,28 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
       
       if (type === 'flam') {
         // Flam: grace note (opposite hand) + main note
-        // Pattern has 2 hits: grace note, main note
+        // Pattern has 2 hits: grace note, main note - both anchor to main for errors
         const graceHand = hand === 'R' ? 'L' : 'R';
         const isAccent = vel === ACCENT || vel === 'accent';
         const graceHit = patternHitIdx++;
         const mainHit = patternHitIdx++;
-        events.push({ slot, velocity: 'N', sticking: graceHand, isGrace: true, isFlam: true, hideLabel: true, graceOffset: -24, patternHitIdx: graceHit });
-        events.push({ slot, velocity: notationVel, sticking: hand, isGrace: false, isFlam: true, isAccent, dur, patternHitIdx: mainHit });
+        events.push({ slot, velocity: 'N', sticking: graceHand, isGrace: true, isFlam: true, hideLabel: true, graceOffset: -24, patternHitIdx: graceHit, errorAnchorIdx: mainHit });
+        events.push({ slot, velocity: notationVel, sticking: hand, isGrace: false, isFlam: true, isAccent, dur, patternHitIdx: mainHit, errorAnchorIdx: mainHit });
         slot += slots;
         continue;
       }
       
       if (type === 'drag') {
         // Drag: two grace notes (opposite hand) + main note
-        // Pattern has 3 hits: grace1, grace2, main
+        // Pattern has 3 hits: grace1, grace2, main - all anchor to main for errors
         const graceHand = hand === 'R' ? 'L' : 'R';
         const isAccent = vel === ACCENT || vel === 'accent';
         const grace1Hit = patternHitIdx++;
         const grace2Hit = patternHitIdx++;
         const mainHit = patternHitIdx++;
-        events.push({ slot, velocity: 'N', sticking: graceHand, isGrace: true, isDragGrace: true, dragIdx: 0, hideLabel: true, graceOffset: -38, patternHitIdx: grace1Hit });
-        events.push({ slot, velocity: 'N', sticking: graceHand, isGrace: true, isDragGrace: true, dragIdx: 1, hideLabel: true, graceOffset: -24, patternHitIdx: grace2Hit });
-        events.push({ slot, velocity: notationVel, sticking: hand, isGrace: false, isDrag: true, isAccent, dur, patternHitIdx: mainHit });
+        events.push({ slot, velocity: 'N', sticking: graceHand, isGrace: true, isDragGrace: true, dragIdx: 0, hideLabel: true, graceOffset: -38, patternHitIdx: grace1Hit, errorAnchorIdx: mainHit });
+        events.push({ slot, velocity: 'N', sticking: graceHand, isGrace: true, isDragGrace: true, dragIdx: 1, hideLabel: true, graceOffset: -24, patternHitIdx: grace2Hit, errorAnchorIdx: mainHit });
+        events.push({ slot, velocity: notationVel, sticking: hand, isGrace: false, isDrag: true, isAccent, dur, patternHitIdx: mainHit, errorAnchorIdx: mainHit });
         slot += slots;
         continue;
       }
@@ -1476,6 +1492,12 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
   
   // Build hit map for cursor: patternHitIdx -> x position
   const hitMap = {};
+  // Build error anchor map: patternHitIdx -> main note's patternHitIdx for error rendering
+  // For compound notes (doubles, flams, drags), all hits map to the main note
+  const errorAnchorMap = {};
+  // Build note info map: patternHitIdx -> { isGrace, graceOffset, sticking, x, y }
+  // Used for rendering errors with correct size and position
+  const noteInfoMap = {};
   
   // Padding inside the bar lines for notes
   const visualGap = 45;
@@ -1526,6 +1548,38 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
     // Store x position for cursor (skip second hit of doubles)
     if (ev.patternHitIdx !== undefined && hitMap[ev.patternHitIdx] === undefined) {
       hitMap[ev.patternHitIdx] = x;
+    }
+    // Store error anchor mapping
+    if (ev.patternHitIdx !== undefined && ev.errorAnchorIdx !== undefined) {
+      errorAnchorMap[ev.patternHitIdx] = ev.errorAnchorIdx;
+    }
+    // Also map second hit of doubles to the anchor
+    if (ev.patternHitIdx2 !== undefined && ev.errorAnchorIdx !== undefined) {
+      errorAnchorMap[ev.patternHitIdx2] = ev.errorAnchorIdx;
+    }
+    // Store note info for error rendering (include dynamics info)
+    if (ev.patternHitIdx !== undefined) {
+      noteInfoMap[ev.patternHitIdx] = { 
+        isGrace, 
+        graceOffset: ev.graceOffset || 0, 
+        sticking: ev.sticking, 
+        x, y,
+        isAccent: ev.isAccent || false,
+        isGhost: isGhostNote,
+        velocity: ev.velocity // 'A', 'G', or 'N'
+      };
+    }
+    if (ev.patternHitIdx2 !== undefined) {
+      // Second hit of doubles - same position, normal velocity
+      noteInfoMap[ev.patternHitIdx2] = { 
+        isGrace: false, 
+        graceOffset: 0, 
+        sticking: ev.sticking, 
+        x, y,
+        isAccent: false,
+        isGhost: false,
+        velocity: 'N'
+      };
     }
     
     // Draw ghost parentheses (only for actual ghost notes, not drag grace notes)
@@ -1592,6 +1646,8 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
   // patternHitIdx is the total number of hits displayed in the notation bar
   window._notationHitMap = hitMap;
   window._notationHitsPerCycle = patternHitIdx;
+  window._notationErrorAnchorMap = errorAnchorMap;
+  window._notationNoteInfoMap = noteInfoMap;
   
   // Draw beams connecting notes in groups
   // Group by beat: 16ths → 4 per beat, 8ths → 2 per beat, triplets → 3 per beat
@@ -1696,6 +1752,431 @@ function renderNotation(patternName) {
 }
 
 // ========== END NOTATION RENDERING ==========
+
+// Compute timing errors for each matched note and update error state
+// pattern: array of {time, velocity, sticking} (aligned times)
+// match: array of {time, velocity, sticking} (transformed to align with pattern)
+// latestPatternIdx: the pattern index that the latest match note corresponds to
+function computeTimingErrors(pattern, match, latestPatternIdx) {
+  if (!pattern || !pattern.length || !match || !match.length) return;
+  
+  const hitsPerCycle = window._notationHitsPerCycle || pattern.length;
+  const errorAnchorMap = window._notationErrorAnchorMap || {};
+  
+  // For compound notes (doubles, flams, drags), use the anchored index
+  const anchoredLatestIdx = errorAnchorMap[latestPatternIdx] !== undefined 
+    ? errorAnchorMap[latestPatternIdx] 
+    : latestPatternIdx;
+  const latestNotationIdx = anchoredLatestIdx % hitsPerCycle;
+  
+  // Clear errors for the notation index we're updating (wrap-around clears old errors)
+  window._noteErrors[latestNotationIdx] = [];
+  
+  // Clear dynamics errors for the notation index being updated
+  // (dynamics errors are keyed by originalPatternIdx, so clear any that map to this notation index)
+  if (window._dynamicsErrors) {
+    for (const key of Object.keys(window._dynamicsErrors)) {
+      const idx = parseInt(key);
+      // Clear if this dynamics error's notation index matches
+      if (idx === latestNotationIdx) {
+        delete window._dynamicsErrors[key];
+      }
+    }
+  }
+  
+  // Check if match data has sticking information
+  const matchHasSticking = match.some(m => m.sticking && m.sticking !== '');
+  
+  // Find which pattern note each match note is closest to
+  const patternMatched = new Array(pattern.length).fill(false);
+  const matchAssignments = []; // for each match note: { matchIdx, patternIdx, error, ... }
+  
+  for (let mi = 0; mi < match.length; mi++) {
+    const m = match[mi];
+    let bestPatIdx = -1;
+    let bestDist = Number.MAX_VALUE;
+    
+    for (let pi = 0; pi < pattern.length; pi++) {
+      const dist = Math.abs(pattern[pi].time - m.time);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestPatIdx = pi;
+      }
+    }
+    
+    if (bestPatIdx >= 0) {
+      const patTime = pattern[bestPatIdx].time;
+      const patSticking = pattern[bestPatIdx].sticking || 'R';
+      const matchTime = m.time;
+      const matchSticking = m.sticking || '';
+      const matchVelocity = m.velocity || 0; // numeric velocity from played note
+      const timingError = matchTime - patTime; // positive = late (dragging), negative = early (rushing)
+      
+      // Check for sticking mismatch (only if match has sticking data)
+      const stickingMismatch = matchHasSticking && matchSticking !== '' && matchSticking !== patSticking;
+      
+      // Use error anchor map to get the correct notation index for compound notes
+      const errorAnchorMap = window._notationErrorAnchorMap || {};
+      const noteInfoMap = window._notationNoteInfoMap || {};
+      const anchoredPatIdx = errorAnchorMap[bestPatIdx] !== undefined ? errorAnchorMap[bestPatIdx] : bestPatIdx;
+      
+      // Get note info for the original hit (not anchored) to know if it's a grace note and dynamics
+      const noteInfo = noteInfoMap[bestPatIdx % hitsPerCycle] || { isGrace: false, graceOffset: 0, isAccent: false, isGhost: false };
+      
+      // Check for dynamics mismatches
+      // Velocity range is 32-127 after scaling, so max=127
+      const velocityThreshold = 127 * DYNAMICS_ACCENT_THRESHOLD; // ~64
+      const missedAccent = noteInfo.isAccent && matchVelocity < velocityThreshold;
+      const missedGhost = noteInfo.isGhost && matchVelocity > velocityThreshold;
+      
+      matchAssignments.push({
+        matchIdx: mi,
+        patternIdx: bestPatIdx,
+        originalPatternIdx: bestPatIdx % hitsPerCycle, // for looking up grace note info
+        notationIdx: anchoredPatIdx % hitsPerCycle, // use anchored index for compound notes
+        timingError,
+        alreadyMatched: patternMatched[bestPatIdx],
+        matchSticking,
+        patternSticking: patSticking,
+        stickingMismatch,
+        isGrace: noteInfo.isGrace,
+        graceOffset: noteInfo.graceOffset,
+        matchVelocity,
+        isAccent: noteInfo.isAccent,
+        isGhost: noteInfo.isGhost,
+        missedAccent,
+        missedGhost
+      });
+      patternMatched[bestPatIdx] = true;
+    }
+  }
+  
+  // Calculate beat duration for proportional offset (use average time between pattern notes)
+  let beatDurationMs = 500; // default
+  if (pattern.length >= 2) {
+    const totalTime = pattern[pattern.length - 1].time - pattern[0].time;
+    beatDurationMs = totalTime / (pattern.length - 1);
+  }
+  
+  // Process assignments to find errors
+  for (const assignment of matchAssignments) {
+    const { notationIdx, originalPatternIdx, timingError, alreadyMatched, matchSticking, patternSticking, stickingMismatch, isGrace, graceOffset, missedAccent, missedGhost } = assignment;
+    
+    // Only update errors for the note we just matched (latestNotationIdx)
+    // This ensures we clear old errors on wrap-around
+    if (notationIdx !== latestNotationIdx) continue;
+    
+    // Determine which sticking to display: user's if available, otherwise pattern's
+    const displaySticking = (matchHasSticking && matchSticking !== '') ? matchSticking : patternSticking;
+    
+    // Check for dynamics errors (missed accent or missed ghost)
+    if (missedAccent) {
+      if (!window._dynamicsErrors) window._dynamicsErrors = {};
+      window._dynamicsErrors[originalPatternIdx] = { type: 'accent' };
+    }
+    if (missedGhost) {
+      if (!window._dynamicsErrors) window._dynamicsErrors = {};
+      window._dynamicsErrors[originalPatternIdx] = { type: 'ghost' };
+    }
+    // Clear dynamics error if played correctly
+    if (!missedAccent && !missedGhost && window._dynamicsErrors) {
+      delete window._dynamicsErrors[originalPatternIdx];
+    }
+    
+    // Check for sticking error (even if timing is good)
+    if (stickingMismatch) {
+      window._noteErrors[notationIdx].push({ 
+        type: 'sticking', 
+        offsetRatio: 0, 
+        sticking: displaySticking,
+        patternSticking,
+        isGrace,
+        graceOffset
+      });
+    }
+    
+    // Check if timing is within dead zone
+    const timingOk = Math.abs(timingError) <= TIMING_DEAD_ZONE_MS;
+    
+    if (!timingOk) {
+      // Calculate offset ratio (how far off as proportion of beat spacing)
+      const offsetRatio = timingError / beatDurationMs;
+      
+      if (timingError < 0) {
+        // Rushing (early)
+        window._noteErrors[notationIdx].push({ 
+          type: 'rush', 
+          offsetRatio, 
+          sticking: displaySticking,
+          patternSticking,
+          isGrace,
+          graceOffset
+        });
+      } else {
+        // Dragging (late)
+        window._noteErrors[notationIdx].push({ 
+          type: 'drag', 
+          offsetRatio, 
+          sticking: displaySticking,
+          patternSticking,
+          isGrace,
+          graceOffset
+        });
+      }
+    }
+    
+    // Extra hit on same beat (double-matched)
+    if (alreadyMatched) {
+      window._noteErrors[notationIdx].push({ 
+        type: 'extra', 
+        offsetRatio: timingError / beatDurationMs, 
+        sticking: displaySticking,
+        patternSticking,
+        isGrace,
+        graceOffset
+      });
+    }
+  }
+  
+  // Check for misses: pattern notes near the latest that weren't matched
+  // Only mark as missed if they're between the first and last matched pattern indices
+  let firstMatched = -1, lastMatched = -1;
+  for (let pi = 0; pi < pattern.length; pi++) {
+    if (patternMatched[pi]) {
+      if (firstMatched < 0) firstMatched = pi;
+      lastMatched = pi;
+    }
+  }
+  
+  if (firstMatched >= 0 && lastMatched > firstMatched) {
+    const noteInfoMap = window._notationNoteInfoMap || {};
+    for (let pi = firstMatched; pi <= lastMatched; pi++) {
+      if (!patternMatched[pi]) {
+        // Use anchored index for compound notes
+        const anchoredPi = errorAnchorMap[pi] !== undefined ? errorAnchorMap[pi] : pi;
+        const notationIdx = anchoredPi % hitsPerCycle;
+        const patSticking = pattern[pi].sticking || 'R';
+        // Get note info for the original hit (not anchored) to know if it's a grace note
+        const noteInfo = noteInfoMap[pi % hitsPerCycle] || { isGrace: false, graceOffset: 0 };
+        // Only update if this is the notation index we just passed
+        // (to avoid clearing valid data or adding stale misses)
+        if (notationIdx === latestNotationIdx || 
+            (notationIdx === (latestNotationIdx - 1 + hitsPerCycle) % hitsPerCycle)) {
+          if (!window._noteErrors[notationIdx]) window._noteErrors[notationIdx] = [];
+          window._noteErrors[notationIdx].push({ 
+            type: 'miss', 
+            offsetRatio: 0, 
+            sticking: patSticking,
+            patternSticking: patSticking,
+            isGrace: noteInfo.isGrace,
+            graceOffset: noteInfo.graceOffset
+          });
+        }
+      }
+    }
+  }
+  
+  // Trigger re-render of error markers
+  renderTimingErrors();
+}
+
+// Render timing error markers on the notation SVG
+function renderTimingErrors() {
+  const svg = document.querySelector('#notationContainer svg');
+  if (!svg) return;
+  
+  const hitMap = window._notationHitMap;
+  if (!hitMap) return;
+  
+  // Remove existing error markers
+  const existing = svg.querySelectorAll('.timing-error');
+  existing.forEach(el => el.remove());
+  
+  // Get notation dimensions from the staff line
+  const staffLine = svg.querySelector('line');
+  if (!staffLine) return;
+  
+  const centerY = parseFloat(staffLine.getAttribute('y1'));
+  const lineThickness = 2;
+  
+  // Note dimensions (matching notation rendering)
+  const headRx = 8;
+  const headRy = 5.5;
+  const graceRx = 5;
+  const graceRy = 3.5;
+  const angleRad = -25 * Math.PI / 180;
+  const minStem = 42;
+  const graceStemLen = 20;
+  const beamY = centerY - 54; // top of beams (matching notation)
+  const anchor = stemAnchor(headRx, headRy, angleRad);
+  const graceAnchor = stemAnchor(graceRx, graceRy, angleRad);
+  
+  // Get slot width from notation (distance between adjacent notes)
+  const hitPositions = Object.values(hitMap).filter(x => x !== null).sort((a, b) => a - b);
+  let slotWidth = 50; // default
+  if (hitPositions.length >= 2) {
+    let minSpacing = Number.MAX_VALUE;
+    for (let i = 1; i < hitPositions.length; i++) {
+      const spacing = hitPositions[i] - hitPositions[i - 1];
+      if (spacing > 0 && spacing < minSpacing) minSpacing = spacing;
+    }
+    if (minSpacing < Number.MAX_VALUE) slotWidth = minSpacing;
+  }
+  
+  // All errors are red (including misses)
+  const errorColor = 'rgba(255, 80, 80, 0.9)';
+  
+  // Draw error markers
+  for (const [notationIdxStr, errors] of Object.entries(window._noteErrors)) {
+    const notationIdx = parseInt(notationIdxStr);
+    const baseX = hitMap[notationIdx];
+    if (baseX === null || baseX === undefined) continue;
+    
+    for (const error of errors) {
+      const sticking = error.sticking || 'R';
+      const offsetX = (error.offsetRatio || 0) * slotWidth;
+      const isGrace = error.isGrace || false;
+      const graceOffset = error.graceOffset || 0;
+      const isMiss = error.type === 'miss';
+      const isStickingError = error.type === 'sticking';
+      
+      // Use appropriate dimensions for grace vs main notes
+      const rx = isGrace ? graceRx : headRx;
+      const ry = isGrace ? graceRy : headRy;
+      const anch = isGrace ? graceAnchor : anchor;
+      
+      // Apply grace offset to x position
+      const x = baseX + offsetX + graceOffset;
+      
+      // Y position based on sticking: R below line, L above line
+      const y = sticking === 'R' 
+        ? centerY + ry + lineThickness / 2 + 2
+        : centerY - ry - lineThickness / 2 - 2;
+      
+      // Create a group for the error note
+      const g = createSvgElement('g');
+      g.setAttribute('class', 'timing-error');
+      
+      // Draw notehead (hollow for misses, filled for other errors)
+      const head = createSvgElement('ellipse');
+      head.setAttribute('cx', x);
+      head.setAttribute('cy', y);
+      head.setAttribute('rx', rx);
+      head.setAttribute('ry', ry);
+      if (isMiss) {
+        // Hollow notehead for misses
+        head.setAttribute('fill', 'none');
+        head.setAttribute('stroke', errorColor);
+        head.setAttribute('stroke-width', '2');
+      } else {
+        // Filled notehead for other errors
+        head.setAttribute('fill', errorColor);
+      }
+      head.setAttribute('transform', `rotate(${angleRad * 180 / Math.PI} ${x} ${y})`);
+      g.appendChild(head);
+      
+      // Draw stem (skip for sticking errors - just show notehead on wrong side)
+      if (!isStickingError) {
+        const stemX = x + anch.offsetX * 0.9;
+        const stemStartY = y + anch.offsetY;
+        const stemLen = isGrace ? graceStemLen : Math.max(minStem, stemStartY - beamY + 1);
+        const stem = createSvgElement('line');
+        stem.setAttribute('x1', stemX);
+        stem.setAttribute('y1', stemStartY);
+        stem.setAttribute('x2', stemX);
+        stem.setAttribute('y2', stemStartY - stemLen);
+        stem.setAttribute('stroke', errorColor);
+        stem.setAttribute('stroke-width', '2');
+        stem.setAttribute('stroke-linecap', 'round');
+        g.appendChild(stem);
+        
+        // Draw flag on grace note errors (like flam grace notes)
+        if (isGrace) {
+          // Simple flag shape
+          const flagStartY = stemStartY - stemLen;
+          const flag = createSvgElement('path');
+          const flagPath = `M ${stemX} ${flagStartY} q 6 8, 4 16`;
+          flag.setAttribute('d', flagPath);
+          flag.setAttribute('fill', 'none');
+          flag.setAttribute('stroke', errorColor);
+          flag.setAttribute('stroke-width', '2');
+          flag.setAttribute('stroke-linecap', 'round');
+          g.appendChild(flag);
+        }
+      }
+      
+      svg.appendChild(g);
+    }
+  }
+  
+  // Render dynamics errors (missed accents and ghost notes)
+  const dynamicsErrors = window._dynamicsErrors || {};
+  const noteInfoMap = window._notationNoteInfoMap || {};
+  const accentOffset = 16;
+  
+  for (const [patternIdxStr, error] of Object.entries(dynamicsErrors)) {
+    const patternIdx = parseInt(patternIdxStr);
+    const noteInfo = noteInfoMap[patternIdx];
+    if (!noteInfo) continue;
+    
+    const { x, y, sticking, isAccent, isGhost } = noteInfo;
+    const ry = headRy; // use main note size for positioning
+    
+    // Create group for dynamics error
+    const g = createSvgElement('g');
+    g.setAttribute('class', 'timing-error dynamics-error');
+    
+    if (error.type === 'accent' && isAccent) {
+      // Draw red accent mark over the note
+      // Position above the stem end (matching notation rendering)
+      const stemStartY = sticking === 'R' 
+        ? centerY + ry + lineThickness / 2 + 2 + anchor.offsetY
+        : centerY - ry - lineThickness / 2 - 2 + anchor.offsetY;
+      const stemLen = Math.max(minStem, stemStartY - beamY + 1);
+      const accentY = stemStartY - stemLen - accentOffset;
+      
+      // Draw accent mark (matching makeAccentMark style - open ">" shape)
+      const accent = createSvgElement('path');
+      const w = 7;  // half-width
+      const h = 6;  // half-height
+      accent.setAttribute('d', `M ${x - w} ${accentY - h} L ${x + w} ${accentY} L ${x - w} ${accentY + h}`);
+      accent.setAttribute('stroke', errorColor);
+      accent.setAttribute('stroke-width', '2.5');
+      accent.setAttribute('fill', 'none');
+      accent.setAttribute('stroke-linecap', 'round');
+      accent.setAttribute('stroke-linejoin', 'round');
+      g.appendChild(accent);
+    }
+    
+    if (error.type === 'ghost' && isGhost) {
+      // Draw red parentheses around the note
+      const offset = 14;
+      const height = ry * 2.2;
+      
+      // Left paren
+      const leftParen = createSvgElement('path');
+      leftParen.setAttribute('d', `M ${x - offset + 4} ${y - height / 2} Q ${x - offset - 2} ${y}, ${x - offset + 4} ${y + height / 2}`);
+      leftParen.setAttribute('stroke', errorColor);
+      leftParen.setAttribute('stroke-width', '2');
+      leftParen.setAttribute('fill', 'none');
+      leftParen.setAttribute('stroke-linecap', 'round');
+      g.appendChild(leftParen);
+      
+      // Right paren
+      const rightParen = createSvgElement('path');
+      rightParen.setAttribute('d', `M ${x + offset - 4} ${y - height / 2} Q ${x + offset + 2} ${y}, ${x + offset - 4} ${y + height / 2}`);
+      rightParen.setAttribute('stroke', errorColor);
+      rightParen.setAttribute('stroke-width', '2');
+      rightParen.setAttribute('fill', 'none');
+      rightParen.setAttribute('stroke-linecap', 'round');
+      g.appendChild(rightParen);
+    }
+    
+    if (g.childNodes.length > 0) {
+      svg.appendChild(g);
+    }
+  }
+}
 
 // Move notation cursor to the given pattern hit index
 // Uses modulo to wrap around if pattern repeats more than notation
@@ -2060,6 +2541,8 @@ function search(pattern, match, velocityWeight, stickingWeight, opts = {}) {
       window._lastMatchedPatternIdx = best.latestIdx;
       // Highlight the corresponding notation element
       highlightNotationHit(best.latestIdx);
+      // Compute and render timing errors
+      computeTimingErrors(pat, best.match, best.latestIdx);
     }
     renderPatternMatch(pat, best.match, 1.0, 0);
     const dbg = document.getElementById('debug');
