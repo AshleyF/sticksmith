@@ -161,7 +161,7 @@
 
     // State
     let lastMessageTime = 0;
-    const BURST_TIMEOUT_MS = 1000;
+    const BURST_TIMEOUT_MS = 500;
     let detectedChannel = null;
     let isNewBurst = true;
 
@@ -203,11 +203,12 @@
         <td class="col-instrument">${instrument}</td>
       `;
       
-      logBody.appendChild(tr);
+      // Insert at the top (most recent first)
+      logBody.insertBefore(tr, logBody.firstChild);
       
-      // Auto-scroll to bottom
+      // Auto-scroll to top
       const logDiv = document.getElementById('log');
-      logDiv.scrollTop = logDiv.scrollHeight;
+      logDiv.scrollTop = 0;
 
       // Update detected channel display
       if (channel !== '-' && detectedChannel !== channel) {
