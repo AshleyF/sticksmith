@@ -10,7 +10,7 @@
       background: #111;
       color: #fff;
       font-family: 'Consolas', 'Monaco', monospace;
-      font-size: 14px;
+      font-size: 42px;
     }
     h1 {
       margin: 0 0 10px 0;
@@ -52,12 +52,13 @@
       text-align: left;
       color: #666;
       font-weight: normal;
-      padding: 4px 12px 8px 0;
+      padding: 4px 24px 8px 0;
       border-bottom: 1px solid #333;
     }
     #log td {
-      padding: 3px 12px 3px 0;
+      padding: 3px 24px 3px 0;
       vertical-align: top;
+      white-space: nowrap;
     }
     .note-on {
       color: #6f6;
@@ -72,35 +73,30 @@
       color: #fa6;
     }
     .col-type {
-      width: 80px;
-    }
-    .col-channel {
-      width: 50px;
-      text-align: right;
+      width: 160px;
     }
     .col-note {
-      width: 80px;
+      width: 100px;
     }
     .col-name {
-      width: 120px;
+      width: 160px;
     }
     .col-value {
-      width: 60px;
+      width: 100px;
       text-align: right;
     }
-    .col-drum {
-      width: 150px;
+    .col-instrument {
       color: #aaa;
-    }
-    .col-raw {
-      color: #555;
-      font-size: 12px;
+      white-space: nowrap;
     }
     .burst-separator {
       border-top: 1px dashed #333;
     }
     .burst-separator td {
       padding-top: 12px;
+    }
+    #log tbody tr:nth-child(even) {
+      background: #181818;
     }
   </style>
 </head>
@@ -119,12 +115,10 @@
       <thead>
         <tr>
           <th class="col-type">Type</th>
-          <th class="col-channel">Ch</th>
           <th class="col-note">Note</th>
           <th class="col-name">Name</th>
           <th class="col-value">Value</th>
-          <th class="col-drum">Drum</th>
-          <th class="col-raw">Raw</th>
+          <th class="col-instrument">Instrument</th>
         </tr>
       </thead>
       <tbody id="logBody">
@@ -180,7 +174,7 @@
       return Array.from(data).map(b => '0x' + b.toString(16).padStart(2, '0')).join(' ');
     }
 
-    function addLogEntry(type, channel, note, name, value, drum, raw, cssClass) {
+    function addLogEntry(type, channel, note, name, value, instrument, cssClass) {
       const now = performance.now();
       const timeSinceLastMsg = now - lastMessageTime;
       
@@ -203,12 +197,10 @@
 
       tr.innerHTML = `
         <td class="col-type">${type}</td>
-        <td class="col-channel">${channel}</td>
         <td class="col-note">${note}</td>
         <td class="col-name">${name}</td>
         <td class="col-value">${value}</td>
-        <td class="col-drum">${drum}</td>
-        <td class="col-raw">${raw}</td>
+        <td class="col-instrument">${instrument}</td>
       `;
       
       logBody.appendChild(tr);
@@ -238,38 +230,38 @@
       if (cmd === 0x90 && data2 > 0) {
         // Note On
         const noteName = midiNoteToName(data1);
-        const drumName = drumMap[data1] || '';
-        addLogEntry('Note On', channel, data1, noteName, data2, drumName, raw, 'note-on');
+        const instrumentName = drumMap[data1] || '';
+        addLogEntry('Note On', channel, data1, noteName, data2, instrumentName, 'note-on');
       } else if (cmd === 0x90 && data2 === 0 || cmd === 0x80) {
         // Note Off
         const noteName = midiNoteToName(data1);
-        const drumName = drumMap[data1] || '';
-        addLogEntry('Note Off', channel, data1, noteName, data2, drumName, raw, 'note-off');
+        const instrumentName = drumMap[data1] || '';
+        addLogEntry('Note Off', channel, data1, noteName, data2, instrumentName, 'note-off');
       } else if (cmd === 0xb0) {
         // CC
         const ccName = ccMap[data1] || `CC ${data1}`;
-        addLogEntry('CC', channel, data1, ccName, data2, '', raw, 'cc');
+        addLogEntry('CC', channel, data1, ccName, data2, '', 'cc');
       } else if (cmd === 0xe0) {
         // Pitch Bend
         const bendValue = ((data2 << 7) | data1) - 8192;
-        addLogEntry('Pitch Bend', channel, '-', '', bendValue, '', raw, 'other');
+        addLogEntry('Pitch Bend', channel, '-', '', bendValue, '', 'other');
       } else if (cmd === 0xc0) {
         // Program Change
-        addLogEntry('Program', channel, data1, '', '-', '', raw, 'other');
+        addLogEntry('Program', channel, data1, '', '-', '', 'other');
       } else if (cmd === 0xd0) {
         // Channel Pressure
-        addLogEntry('Pressure', channel, '-', '', data1, '', raw, 'other');
+        addLogEntry('Pressure', channel, '-', '', data1, '', 'other');
       } else if (cmd === 0xa0) {
         // Polyphonic Aftertouch
         const noteName = midiNoteToName(data1);
-        addLogEntry('Poly AT', channel, data1, noteName, data2, '', raw, 'other');
+        addLogEntry('Poly AT', channel, data1, noteName, data2, '', 'other');
       } else if (status === 0xf8) {
         // Timing clock - ignore (too spammy)
       } else if (status === 0xfe) {
         // Active sensing - ignore (too spammy)
       } else {
         // Other/unknown
-        addLogEntry('Other', '-', '-', '', '-', '', raw, 'other');
+        addLogEntry('Other', '-', '-', '', '-', '', 'other');
       }
     }
 
@@ -318,6 +310,58 @@
 
     // Start immediately
     initializeMIDI();
+
+    // Simulated MIDI data for testing (spacebar)
+    const knownDrumNotes = [38, 40, 23, 37, 19, 18, 16, 17, 20, 21];
+    const unknownDrumNotes = [36, 42, 46, 49, 51, 60, 100];
+    const knownCCs = [16, 80, 88];
+    const unknownCCs = [1, 7, 11, 64, 74];
+
+    function randomChoice(arr) {
+      return arr[Math.floor(Math.random() * arr.length)];
+    }
+
+    function randomInt(min, max) {
+      return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
+
+    function simulateMidiBurst() {
+      const channel = 10; // Drums typically on channel 10
+      
+      // Pick a note - 70% chance known, 30% unknown
+      const note = Math.random() < 0.7 
+        ? randomChoice(knownDrumNotes) 
+        : randomChoice(unknownDrumNotes);
+      
+      const velocity = randomInt(40, 127);
+      
+      // Simulate Note On
+      const noteOnData = new Uint8Array([0x90 | (channel - 1), note, velocity]);
+      handleMIDIMessage({ data: noteOnData });
+      
+      // Simulate some CCs (like Roland digital drums send)
+      const numCCs = randomInt(1, 3);
+      for (let i = 0; i < numCCs; i++) {
+        // 60% chance known CC, 40% unknown
+        const cc = Math.random() < 0.6 
+          ? randomChoice(knownCCs) 
+          : randomChoice(unknownCCs);
+        const ccValue = randomInt(0, 127);
+        const ccData = new Uint8Array([0xB0 | (channel - 1), cc, ccValue]);
+        handleMIDIMessage({ data: ccData });
+      }
+      
+      // Simulate Note Off
+      const noteOffData = new Uint8Array([0x80 | (channel - 1), note, 0]);
+      handleMIDIMessage({ data: noteOffData });
+    }
+
+    document.addEventListener('keydown', (event) => {
+      if (event.code === 'Space') {
+        event.preventDefault();
+        simulateMidiBurst();
+      }
+    });
   </script>
 </body>
 </html>

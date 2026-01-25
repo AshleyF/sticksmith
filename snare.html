@@ -205,34 +205,119 @@
         drawSnare();
       }
 
+      // Simulate a MIDI message through the handler
+      function simulateMidi(status, data1, data2) {
+        const data = new Uint8Array([status, data1, data2]);
+        // Call the same path as real MIDI
+        const cmd = status & 0xf0;
+        const channel = status & 0x0f;
+
+        if (cmd === 0x90 && data2 > 0) {
+          midiBatch.collecting = true;
+          midiBatch.noteOn = { note: data1, velocity: data2, channel: channel + 1 };
+          midiBatch.ccs = [];
+          midiBatch.noteOff = null;
+          state.velocityMsb = data2;
+          state.velocity14 = (state.velocityMsb << 7) | (state.velocityLsb & 0x7f);
+          updateHitFromCc();
+          addToMidiLog('Note On', data1, data2, 'rgba(100, 255, 100, 0.9)');
+        } else if (cmd === 0x90 && data2 === 0 || cmd === 0x80) {
+          midiBatch.noteOff = { note: data1, velocity: data2, channel: channel + 1 };
+          midiBatch.collecting = false;
+          lastBatch = {
+            noteOn: midiBatch.noteOn,
+            ccs: [...midiBatch.ccs],
+            noteOff: midiBatch.noteOff
+          };
+          addToMidiLog('Note Off', data1, data2, 'rgba(255, 100, 100, 0.9)');
+        } else if (cmd === 0xb0) {
+          if (data1 === 80) state.angleCc = data2;
+          if (data1 === 16) state.radiusCc = data2;
+          if (data1 === 88) state.velocityLsb = data2;
+          if (midiBatch.collecting) {
+            midiBatch.ccs.push({ controller: data1, value: data2, channel: channel + 1 });
+          }
+          addToMidiLog(getCcName(data1), data1, data2, 'rgba(100, 170, 255, 0.9)');
+        }
+      }
+
+      // Simulate a full snare hit burst (Note On + CCs + Note Off)
+      function simulateSnareHit(note, velocity, angle, radius) {
+        const ch = 9; // Channel 10 (0-indexed)
+        const velLsb = Math.floor(Math.random() * 128); // Random fine velocity
+        
+        // Note On
+        simulateMidi(0x90 | ch, note, velocity);
+        // CC 80 - Angle
+        simulateMidi(0xB0 | ch, 80, angle);
+        // CC 16 - Radius
+        simulateMidi(0xB0 | ch, 16, radius);
+        // CC 88 - Fine Velocity
+        simulateMidi(0xB0 | ch, 88, velLsb);
+        // Note Off
+        simulateMidi(0x80 | ch, note, 0);
+      }
+
       window.addEventListener('keydown', (evt) => {
         const key = (evt.key || '').toLowerCase();
+        
+        // Number keys 1-8: simulate hit at different angles (center hit)
         if (key >= '1' && key <= '8') {
           const idx = Number(key) - 1;
-          state.angleCc = idx * 16;
-          updateHitFromTest();
+          const angle = idx * 16;
+          simulateSnareHit(38, 100, angle, 0); // Snare Head, center
           evt.preventDefault();
           return;
         }
+        
+        // c = Center hit (hard)
         if (key === 'c') {
-          state.radiusCc = 0;
-          state.velocity14 = 16383;
-          updateHitFromTest();
+          simulateSnareHit(38, 120, Math.floor(Math.random() * 128), 0);
           evt.preventDefault();
           return;
         }
+        
+        // m = Middle hit (medium velocity, mid radius)
         if (key === 'm') {
-          state.radiusCc = 64;
-          state.velocity14 = 8192;
-          updateHitFromTest();
+          simulateSnareHit(38, 80, Math.floor(Math.random() * 128), 64);
           evt.preventDefault();
           return;
         }
+        
+        // e = Edge hit (softer, max radius)
         if (key === 'e') {
-          state.radiusCc = 127;
-          state.velocity14 = 2048;
-          updateHitFromTest();
+          simulateSnareHit(38, 60, Math.floor(Math.random() * 128), 127);
           evt.preventDefault();
+          return;
+        }
+        
+        // r = Rim shot
+        if (key === 'r') {
+          simulateSnareHit(40, 110, Math.floor(Math.random() * 128), 127);
+          evt.preventDefault();
+          return;
+        }
+        
+        // x = Cross stick
+        if (key === 'x') {
+          simulateSnareHit(37, 90, Math.floor(Math.random() * 128), 127);
+          evt.preventDefault();
+          return;
+        }
+        
+        // b = Brush
+        if (key === 'b') {
+          simulateSnareHit(23, 70, Math.floor(Math.random() * 128), 64);
+          evt.preventDefault();
+          return;
+        }
+        
+        // w = Toggle wires (alternates between on/off notes)
+        if (key === 'w') {
+          const wireNote = Math.random() < 0.5 ? 20 : 21; // Wires Off or On
+          simulateSnareHit(wireNote, 64, 0, 0);
+          evt.preventDefault();
+          return;
         }
       });
 
