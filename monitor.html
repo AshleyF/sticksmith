@@ -1,2644 +1,323 @@
 <!DOCTYPE html>
 <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <title>MIDI Monitor</title>
-        <style>
-          body { margin: 0; padding: 12px; background: #111; color: #fff; font-family: sans-serif; }
-          #patternTitle { font-size: 5em; margin: 0 0 6px 0; }
-          label { color: #ddd; }
-          select, input, button { background: #222; color: #fff; border: 1px solid #444; }
-          button { cursor: pointer; }
-          #debug { color: #bbb; margin-top: 6px; }
-          #patternCanvas { background: #1a1a1a; border: 1px solid #333; }
-          #debugToggle { color: #666; font-size: 12px; cursor: pointer; text-decoration: none; margin-top: 10px; display: inline-block; }
-          #debugToggle:hover { color: #999; }
-          #debugSection { margin-top: 10px; padding-top: 10px; border-top: 1px solid #333; }
-        </style>
-    </head>
-    <body>
-  <h1 id="patternTitle">MIDI Monitor</h1>
-  <div id="notationContainer" style="margin-top: 10px; background: #1a1a1a; border: 1px solid #333; border-radius: 4px; overflow-x: auto; max-width: 1180px; box-sizing: content-box;"></div>
-  <a href="#" id="debugToggle" onclick="toggleDebugSection(); return false;">▶ Show controls</a>
-  <div id="debugSection" style="display: none;">
-    <label for="patternSelect">Pattern: </label>
-    <select id="patternSelect"></select>
-    <div style="margin-top:6px; font-size:12px;">
-      <a href="snare.html" style="color:#9ad;">Open Snare Monitor</a>
-    </div>
-    <div id="tempoControls" style="margin-top:6px; font-size:12px;">
-      <label for="bpmInput">BPM: </label>
-      <input id="bpmInput" type="number" min="1" max="400" step="1" value="120" style="width:70px" />
-    </div>
-    <div id="midiMap" style="margin-top:8px; font-family:sans-serif; font-size:12px;">
-      <strong>Stick mapping</strong>
-      <div style="margin-top:4px;">
-        <label>Right notes: <input id="rightNotes" type="text" placeholder="e.g. 38, 40" style="width:180px" /></label>
-        <button id="learnRight" type="button">Learn next note</button>
-      </div>
-      <div style="margin-top:4px;">
-        <label>Left notes: <input id="leftNotes" type="text" placeholder="e.g. 37, 42" style="width:180px" /></label>
-        <button id="learnLeft" type="button">Learn next note</button>
-      </div>
-      <div id="lastNote" style="margin-top:4px; color:#888;">Last MIDI note: --</div>
-    </div>
-    <div id="debug"></div>
-    <canvas id="patternCanvas" width="1180" height="260" style="display:block; margin-top:10px"></canvas>
+<head>
+  <meta charset="UTF-8">
+  <title>MIDI Monitor</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 20px;
+      background: #111;
+      color: #fff;
+      font-family: 'Consolas', 'Monaco', monospace;
+      font-size: 14px;
+    }
+    h1 {
+      margin: 0 0 10px 0;
+      font-size: 1.5em;
+      color: #888;
+    }
+    #status {
+      margin-bottom: 15px;
+      padding: 10px;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 4px;
+    }
+    #status .label {
+      color: #666;
+    }
+    #status .value {
+      color: #fff;
+    }
+    #status .connected {
+      color: #6f6;
+    }
+    #status .disconnected {
+      color: #f66;
+    }
+    #log {
+      background: #0a0a0a;
+      border: 1px solid #333;
+      border-radius: 4px;
+      padding: 10px;
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+    #log table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    #log th {
+      text-align: left;
+      color: #666;
+      font-weight: normal;
+      padding: 4px 12px 8px 0;
+      border-bottom: 1px solid #333;
+    }
+    #log td {
+      padding: 3px 12px 3px 0;
+      vertical-align: top;
+    }
+    .note-on {
+      color: #6f6;
+    }
+    .note-off {
+      color: #f66;
+    }
+    .cc {
+      color: #6af;
+    }
+    .other {
+      color: #fa6;
+    }
+    .col-type {
+      width: 80px;
+    }
+    .col-channel {
+      width: 50px;
+      text-align: right;
+    }
+    .col-note {
+      width: 80px;
+    }
+    .col-name {
+      width: 120px;
+    }
+    .col-value {
+      width: 60px;
+      text-align: right;
+    }
+    .col-drum {
+      width: 150px;
+      color: #aaa;
+    }
+    .col-raw {
+      color: #555;
+      font-size: 12px;
+    }
+    .burst-separator {
+      border-top: 1px dashed #333;
+    }
+    .burst-separator td {
+      padding-top: 12px;
+    }
+  </style>
+</head>
+<body>
+  <h1>MIDI Monitor</h1>
+  <div id="status">
+    <span class="label">Status: </span>
+    <span id="connectionStatus" class="disconnected">Connecting...</span>
+    <span style="margin-left: 20px;" class="label">Device: </span>
+    <span id="deviceName" class="value">-</span>
+    <span style="margin-left: 20px;" class="label">Channel: </span>
+    <span id="channelDisplay" class="value">-</span>
   </div>
-        <script>
-function toggleDebugSection() {
-  const section = document.getElementById('debugSection');
-  const toggle = document.getElementById('debugToggle');
-  if (section.style.display === 'none') {
-    section.style.display = 'block';
-    toggle.textContent = '▼ Hide controls';
-  } else {
-    section.style.display = 'none';
-    toggle.textContent = '▶ Show controls';
-  }
-}
-window._matchOrigin = performance.now();
-window._matchBuffer = [];
-window._switchPenaltyArmed = false;
-window._midiStickMap = { R: new Set(), L: new Set() };
-window._lastMidiNote = null;
-window._snareAngleCc = null;
-window._pendingStickLearn = null;
-window._bpmTarget = 120;
-const SCORE_DECAY_MS = 8000; // time constant for exponential weight and pruning
-const MAX_MATCH_BEATS = 16; // limit match buffer to most recent beats
-const STICKING_MISMATCH_BASE = 50000; // base penalty multiplier for sticking mismatches
-const NOTE_AGE_CUTOFF_MS = 8000; // discard notes older than this relative to end
-const MATCH_RESET_GAP_MS = 3000; // reset match if there's a long pause between hits
-const TOP_CANDIDATES = 10; // number of best candidates to keep
-const PROGRESS_PENALTY = 20; // penalty if latest note does not advance to expected pattern beat
-const LOCKED_BACKWARD_PENALTY = 10000; // essentially disqualify going backward when locked
-const LOCKED_JUMP_PENALTY_PER_NOTE = 100; // penalty per note skipped when jumping forward while locked
-const LOCKED_JITTER_TOLERANCE = 2; // allow this many notes of jitter around expected position
-const PATTERN_SWITCH_PENALTY = 10; // penalty when switching away from current pattern (legacy, kept for reference)
-const DISQUALIFIED_SCORE = 1e12; // large finite score used when extras/misses occur
+  <div id="log">
+    <table>
+      <thead>
+        <tr>
+          <th class="col-type">Type</th>
+          <th class="col-channel">Ch</th>
+          <th class="col-note">Note</th>
+          <th class="col-name">Name</th>
+          <th class="col-value">Value</th>
+          <th class="col-drum">Drum</th>
+          <th class="col-raw">Raw</th>
+        </tr>
+      </thead>
+      <tbody id="logBody">
+      </tbody>
+    </table>
+  </div>
 
-// Sticky pattern matching: once locked, don't search other patterns until a pause
-const STICKY_PAUSE_MS = 2000; // pause duration to unlock and allow global search
-const STICKY_SCORE_THRESHOLD = 15; // score must be below this to lock onto a pattern
-const STICKY_MIN_NOTES = 6; // minimum notes in match before locking onto a pattern
-const STICKY_BAD_SCORE_THRESHOLD = 50; // if average score exceeds this, unlock
-const STICKY_SCORE_WINDOW_SIZE = 5; // number of recent scores to average
-const FLAM_OFFSET_MS = 60; // spacing between grace note and main note in a flam
-const DRAG_OFFSET_MS = 60; // spacing between notes in a drag
-//const TEST_TIMEOUT = 1000;
-
-// Sticky pattern state
-window._patternLocked = false; // true when we've locked onto a pattern
-window._lastNoteTime = 0; // timestamp of last note for pause detection
-window._unlockTimeout = null; // timeout handle for auto-unlock
-window._recentScores = []; // sliding window of recent scores for bad-match detection
-window._currentBPM = null; // computed BPM from pattern matching
-
-// Timing error tracking for visual feedback
-const TIMING_DEAD_ZONE_MS = 25; // timing error within this range is considered "good" (no indicator)
-
-// Dynamics thresholds for error detection (as fraction of velocity range)
-// Velocities are scaled 32-127 range. Keyboard normal=64, ghost=32, accent=127.
-// Accent miss: played velocity < this fraction of max (127)
-const DYNAMICS_ACCENT_THRESHOLD = 0.6; // accent needs to be > 60% of max velocity (~76)
-// Ghost miss: played velocity > this fraction of max (127)  
-const DYNAMICS_GHOST_THRESHOLD = 0.4; // ghost needs to be < 40% of max velocity (~51)
-window._noteErrors = {}; // map from notation hit index to error info: { type: 'rush'|'drag'|'miss', offsetRatio: number }
-
-// Update the visual lock indicator (circle: hollow when unlocked, solid when locked)
-// Also updates the BPM display next to it
-function updateLockIndicator() {
-  let dot = document.getElementById('lockIndicator');
-  if (!dot) {
-    dot = document.createElement('div');
-    dot.id = 'lockIndicator';
-    dot.style.cssText = 'position: fixed; top: 10px; right: 10px; width: 16px; height: 16px; border-radius: 50%; z-index: 9999; box-sizing: border-box;';
-    document.body.appendChild(dot);
-  }
-  if (window._patternLocked) {
-    dot.style.background = '#cc4444';
-    dot.style.border = 'none';
-  } else {
-    dot.style.background = 'transparent';
-    dot.style.border = '2px solid #cc4444';
-  }
-  
-  // Update BPM display
-  let bpmLabel = document.getElementById('bpmDisplay');
-  if (!bpmLabel) {
-    bpmLabel = document.createElement('div');
-    bpmLabel.id = 'bpmDisplay';
-    bpmLabel.style.cssText = 'position: fixed; top: 10px; right: 34px; font-size: 14px; font-family: sans-serif; color: #cc4444; z-index: 9999;';
-    document.body.appendChild(bpmLabel);
-  }
-  const bpm = window._currentBPM;
-  if (bpm && isFinite(bpm) && bpm > 0) {
-    bpmLabel.textContent = 'BPM ' + Math.round(bpm);
-  } else {
-    bpmLabel.textContent = '';
-  }
-}
-
-// Centralized unlock function - resets all relevant state
-function unlockPattern(reason) {
-  if (!window._patternLocked) return;
-  window._patternLocked = false;
-  window._recentScores = [];
-  window._matchBuffer = [];
-  window._switchPenaltyArmed = false;
-  window._lastMatchedPatternIdx = undefined;
-  window._noteErrors = {}; // clear timing errors on unlock
-  updateLockIndicator();
-  console.log('Pattern unlocked: ' + reason);
-}
-
-function addMatchNoteAt(nowTimeMs, velocity, sticking) {
-  let t = nowTimeMs - window._matchOrigin;
-  
-  // Clear any pending unlock timeout and start a new one
-  if (window._unlockTimeout) {
-    clearTimeout(window._unlockTimeout);
-  }
-  window._unlockTimeout = setTimeout(() => {
-    unlockPattern('timeout after ' + STICKY_PAUSE_MS + 'ms of inactivity');
-  }, STICKY_PAUSE_MS);
-  
-  // Check for pause that should unlock pattern search
-  if (window._lastNoteTime > 0) {
-    const pauseMs = nowTimeMs - window._lastNoteTime;
-    if (pauseMs > STICKY_PAUSE_MS) {
-      // Long pause detected - unlock pattern and reset
-      unlockPattern('pause detected (' + pauseMs.toFixed(0) + 'ms)');
-      window._matchOrigin = nowTimeMs;
-      t = 0;
-    }
-  }
-  window._lastNoteTime = nowTimeMs;
-  
-  if (window._matchBuffer.length > 0) {
-    const lastTime = window._matchBuffer[window._matchBuffer.length - 1].time;
-    const gapMs = t - lastTime;
-    if (gapMs > MATCH_RESET_GAP_MS) {
-      window._matchBuffer = [];
-      window._matchOrigin = nowTimeMs;
-      window._switchPenaltyArmed = false;
-      t = 0;
-    }
-  }
-  if (!window._switchPenaltyArmed) window._switchPenaltyArmed = true;
-  window._matchBuffer.push({ time: t, velocity: Number(velocity || 0), sticking: sticking || '' });
-  // prune old notes
-  // Use a dynamic match window based on the extended pattern length
-  const patternLength = window._extendedPattern[window._extendedPattern.length - 1].time - window._extendedPattern[0].time;
-  const cutoff = t - patternLength;
-  while (window._matchBuffer.length && window._matchBuffer[0].time < cutoff) {
-    window._matchBuffer.shift();
-  }
-  // Also prune anything older than the scoring decay window
-  const decayCutoff = t - SCORE_DECAY_MS;
-  while (window._matchBuffer.length && window._matchBuffer[0].time < decayCutoff) {
-    window._matchBuffer.shift();
-  }
-  // Keep only the most recent MAX_MATCH_BEATS events
-  while (window._matchBuffer.length > MAX_MATCH_BEATS) {
-    window._matchBuffer.shift();
-  }
-  // debug
-  console.log('Match buffer: ' + window._matchBuffer.length + ' events');
-  // prepare a normalized copy of the match buffer that starts at time=0
-  if (window._matchBuffer.length > 0) {
-    const firstTime = window._matchBuffer[0].time;
-    const normalized = window._matchBuffer.map((m) => ({ time: m.time - firstTime, velocity: m.velocity, sticking: m.sticking }));
-    console.log('Match times: [' + normalized.map((m) => m.time.toFixed(0)).join(', ') + ']');
-    // call search using the same pattern setup used elsewhere, with normalized times
-    try {
-      console.log('Calling search with normalized match buffer (' + normalized.length + ' events)');
-      searchAcrossPatterns(normalized, 1, 1);
-    } catch (err) {
-      console.error('Search failed:', err);
-    }
-  }
-}
-
-function parseNoteList(value) {
-  if (!value) return new Set();
-  const parts = String(value)
-    .split(/[,\s]+/)
-    .map((p) => p.trim())
-    .filter(Boolean)
-    .map((p) => Number(p));
-  const set = new Set();
-  for (let i = 0; i < parts.length; i++) {
-    const n = parts[i];
-    if (Number.isFinite(n)) set.add(Math.max(0, Math.min(127, Math.round(n))));
-  }
-  return set;
-}
-
-function updateStickMapFromInputs() {
-  const rightInput = document.getElementById('rightNotes');
-  const leftInput = document.getElementById('leftNotes');
-  if (!rightInput || !leftInput) return;
-  window._midiStickMap.R = parseNoteList(rightInput.value);
-  window._midiStickMap.L = parseNoteList(leftInput.value);
-  try {
-    localStorage.setItem('stickMapRight', rightInput.value || '');
-    localStorage.setItem('stickMapLeft', leftInput.value || '');
-  } catch (e) {
-    // ignore storage errors
-  }
-}
-
-function setupTempoControls() {
-  const bpmInput = document.getElementById('bpmInput');
-  if (bpmInput) {
-    bpmInput.addEventListener('input', () => {
-      const v = Number(bpmInput.value);
-      if (isFinite(v) && v > 0) window._bpmTarget = v;
-    });
-    const v = Number(bpmInput.value);
-    if (isFinite(v) && v > 0) window._bpmTarget = v;
-  }
-}
-
-function stickingFromSnareAngle(angleCc) {
-  if (angleCc === null || angleCc === undefined) return '';
-  const sliceIndex = Math.max(0, Math.min(7, Math.floor(angleCc / 16)));
-  // 0 = up, 4 = down. Right side: 1-3, Left side: 5-7.
-  if (sliceIndex >= 1 && sliceIndex <= 3) return 'R';
-  if (sliceIndex >= 5 && sliceIndex <= 7) return 'L';
-  return '';
-}
-
-function setupStickMappingUI() {
-  const rightInput = document.getElementById('rightNotes');
-  const leftInput = document.getElementById('leftNotes');
-  const learnRight = document.getElementById('learnRight');
-  const learnLeft = document.getElementById('learnLeft');
-  const lastNoteEl = document.getElementById('lastNote');
-
-  try {
-    if (rightInput) rightInput.value = localStorage.getItem('stickMapRight') || '';
-    if (leftInput) leftInput.value = localStorage.getItem('stickMapLeft') || '';
-  } catch (e) {
-    // ignore storage errors
-  }
-
-  if (rightInput) rightInput.addEventListener('input', updateStickMapFromInputs);
-  if (leftInput) leftInput.addEventListener('input', updateStickMapFromInputs);
-
-  function setLastNoteUI() {
-    if (lastNoteEl) {
-      lastNoteEl.textContent = window._lastMidiNote !== null
-        ? ('Last MIDI note: ' + window._lastMidiNote)
-        : 'Last MIDI note: --';
-    }
-  }
-
-  if (learnRight) {
-    learnRight.addEventListener('click', () => {
-      window._pendingStickLearn = 'R';
-      if (lastNoteEl) lastNoteEl.textContent = 'Hit a note to set Right stick';
-    });
-  }
-
-  if (learnLeft) {
-    learnLeft.addEventListener('click', () => {
-      window._pendingStickLearn = 'L';
-      if (lastNoteEl) lastNoteEl.textContent = 'Hit a note to set Left stick';
-    });
-  }
-
-  setLastNoteUI();
-  updateStickMapFromInputs();
-}
-
-// Keyboard test input
-// Right-hand sticking: E = normal, I = ghost, N = accent
-// Left-hand sticking:  S = normal, R = ghost, T = accent
-window.addEventListener('keydown', (evt) => {
-  const key = (evt.key || '').toLowerCase();
-  const now = performance.now();
-  if (key === 'e') {
-    addMatchNoteAt(now, 64, 'R');
-  } else if (key === 'n') {
-    addMatchNoteAt(now, 127, 'R');
-  } else if (key === 'i') {
-    addMatchNoteAt(now, 32, 'R');
-  } else if (key === 's') {
-    addMatchNoteAt(now, 64, 'L');
-  } else if (key === 'r') {
-    addMatchNoteAt(now, 32, 'L');
-  } else if (key === 't') {
-    addMatchNoteAt(now, 127, 'L');
-  } else if (key === ' ') {
-    // Spacebar: normal hit with no sticking label
-    addMatchNoteAt(now, 64, '');
-  } else {
-    return;
-  }
-  evt.preventDefault();
-});
-
-function handleInputsAndOutputs(midiAccess) {
-  console.log("Listing MIDI inputs and outputs:");
-  for (const entry of midiAccess.inputs) {
-    const input = entry[1];
-    console.log(
-      `Input port [type:'${input.type}']` +
-        ` id:'${input.id}'` +
-        ` manufacturer:'${input.manufacturer}'` +
-        ` name:'${input.name}'` +
-        ` version:'${input.version}'`,
-    );
-  }
-
-  for (const entry of midiAccess.outputs) {
-    const output = entry[1];
-    console.log(
-      `Output port [type:'${output.type}'] id:'${output.id}' manufacturer:'${output.manufacturer}' name:'${output.name}' version:'${output.version}'`,
-    );
-  }
-
-  function onMIDIMessage(event) {
-    let str = `MIDI message received at timestamp ${event.timeStamp}[${event.data.length} bytes]: `;
-    for (const character of event.data) {
-      str += `0x${character.toString(16)} `;
-    }
-    console.log(str);
-
-    // Parse and console.log human-friendly info for common MIDI messages
-    try {
-      const data = event.data;
-      if (data && data.length >= 1) {
-        const status = data[0];
-        const cmd = status & 0xf0;
-        const channel = status & 0x0f;
-        let type = 'unknown';
-        if (cmd === 0x80) type = 'noteoff';
-        else if (cmd === 0x90) type = 'noteon';
-        else if (cmd === 0xa0) type = 'poly aftertouch';
-        else if (cmd === 0xb0) type = 'controlchange';
-        else if (cmd === 0xc0) type = 'programchange';
-        else if (cmd === 0xd0) type = 'channel aftertouch';
-        else if (cmd === 0xe0) type = 'pitchbend';
-
-        function noteName(n) {
-          const names = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
-          return names[n % 12] + Math.floor(n / 12) - 1;
-        }
-
-        if (type === 'noteon' || type === 'noteoff') {
-          const note = data[1];
-          const velocity = data[2];
-          window._lastMidiNote = note;
-          const lastNoteEl = document.getElementById('lastNote');
-          if (window._pendingStickLearn) {
-            const target = window._pendingStickLearn;
-            const input = target === 'R' ? document.getElementById('rightNotes') : document.getElementById('leftNotes');
-            const current = parseNoteList(input ? input.value : '');
-            current.add(note);
-            if (input) input.value = Array.from(current).sort((a, b) => a - b).join(', ');
-            updateStickMapFromInputs();
-            window._pendingStickLearn = null;
-          }
-          if (lastNoteEl) {
-            lastNoteEl.textContent = window._lastMidiNote !== null
-              ? ('Last MIDI note: ' + window._lastMidiNote)
-              : 'Last MIDI note: --';
-          }
-          console.log(`MIDI parsed: ${type} ch=${channel+1} note=${note} (${noteName(note)}) velocity=${velocity}`);
-        } else if (type === 'controlchange') {
-          console.log(`MIDI parsed: controlchange ch=${channel+1} controller=${data[1]} value=${data[2]}`);
-          console.log(`CC ch${channel+1}: ${data[1]} -> ${data[2]}`);
-          if (data[1] === 80) {
-            window._snareAngleCc = data[2];
-          }
-        } else if (type === 'programchange') {
-          console.log(`MIDI parsed: programchange ch=${channel+1} program=${data[1]}`);
-        } else {
-          // generic dump for other messages
-          console.log(`MIDI parsed: cmd=0x${cmd.toString(16)} ch=${channel+1} raw=[${Array.from(data).join(',')}]`);
-        }
-      }
-    } catch (e) {
-      console.error('Error parsing MIDI message', e);
-    }
-
-    // Parse Note On messages and add to the running match buffer.
-    try {
-      const data = event.data;
-      if (data && data.length >= 3) {
-        const status = data[0];
-        const data1 = data[1];
-        const data2 = data[2];
-        const cmd = status & 0xf0;
-        // 0x90 = Note On; treat velocity 0 as Note Off
-        if (cmd === 0x90 && data2 > 0) {
-          const note = data1;
-          const map = window._midiStickMap || { R: new Set(), L: new Set() };
-          let sticking = '';
-          if (map.R && map.R.has(note)) sticking = 'R';
-          else if (map.L && map.L.has(note)) sticking = 'L';
-          else sticking = stickingFromSnareAngle(window._snareAngleCc);
-          // Use performance.now() for timing accuracy
-          addMatchNoteAt(performance.now(), data2, sticking);
-        }
-      }
-    } catch (e) {
-      console.error('Failed to parse MIDI message', e);
-    }
-  }
-
-  function startLoggingMIDIInput(midiAccess) {
-    // midiAccess.inputs is an iterable of [id, input] entries
-    midiAccess.inputs.forEach((entry) => {
-      const input = entry[1] || entry;
-      if (typeof input.onmidimessage !== 'undefined') {
-        input.onmidimessage = onMIDIMessage;
-        console.log('Attached onmidimessage to input:', input.id || input.name || input);
-      }
-    });
-
-    // Also listen for device connect/disconnect events
-    if (typeof midiAccess.onstatechange === 'undefined') {
-      midiAccess.onstatechange = (e) => {
-        console.log('MIDI device state changed', e);
-      };
-    }
-  }
-
-  // Attach handlers for current inputs immediately
-  startLoggingMIDIInput(midiAccess);
-}
-
-async function requestMidiAccess()
-{
-  console.log("Requesting MIDI access...");
-  if (typeof navigator.requestMIDIAccess === "function") {
-    try {
-      const access = await navigator.requestMIDIAccess({ sysex: true });
-      console.log("navigator.requestMIDIAccess succeeded.");
-      // You could inspect access.inputs/outputs here if needed.
-      handleInputsAndOutputs(access);
-    } catch (err) {
-      console.log("requestMIDIAccess failed: " + (err && err.message ? err.message : String(err)));
-    }
-  } else {
-    console.log("Web MIDI API (navigator.requestMIDIAccess) is not available in this browser.");
-  }
-}
-
-// Use an async IIFE so we can await feature checks and API calls.
-async function startMIDI() {
-  // If Permissions API or its query method isn't present, fall back.
-  const hasPermissionsAPI = !!navigator.permissions && typeof navigator.permissions.query === "function";
-
-  if (hasPermissionsAPI) {
-    try {
-      // Some browsers (notably some WebKit builds) will reject or throw when
-      // asked about non-supported permission names (like 'midi' with sysex).
-      const result = await navigator.permissions.query({ name: "midi", sysex: true });
-      console.log("Permissions.query succeeded.");
-      if (result.state === "granted") {
-        console.log("MIDI access granted.");
-        await requestMidiAccess();
-      } else if (result.state === "prompt") {
-        console.log("MIDI access will prompt for permission.");
-        await requestMidiAccess();
-      } else {
-        console.log("MIDI access denied.");
-      }
-      return;
-    } catch (err) {
-      // Catch NotSupportedError and other failures from Permissions.query.
-      console.log("Permissions.query failed: " + (err && err.message ? err.message : String(err)));
-      // Fall through to try requestMIDIAccess as a fallback.
-    }
-  } else {
-    console.log("Permissions API/query not available in this browser.");
-  }
-}
-
-var diddle0 = [
-  // { time:    0, velocity: 170, sticking: 'R' },
-  { time:    0, velocity: 100, sticking: 'L' },
-  { time:  100, velocity: 100, sticking: 'R' },
-  { time:  200, velocity: 100, sticking: 'R' },
-  { time:  300, velocity: 170, sticking: 'L' }
-]
-
-diddle1 = [
-  {"time":0,"velocity":23,"sticking":""},
-  {"time":186.69999998807907,"velocity":45,"sticking":""}]
-
-diddle2 = [
-  {"time":0,"velocity":127,"sticking":""},
-  {"time":267.30000001192093,"velocity":32.49999999999999,"sticking":""},
-  {"time":516.1000000238419,"velocity":32.49999999999999,"sticking":""}]
-
-diddle3 = [
-  {"time":0,"velocity":40.66666666666667,"sticking":""},
-  {"time":224.39999997615814,"velocity":33.66666666666667,"sticking":""},
-  {"time":486.19999998807907,"velocity":127,"sticking":""},
-  {"time":770,"velocity":54.66666666666667,"sticking":""}] 
-
-diddle4 = [
-  {"time":0,"velocity":43.53503184713376,"sticking":""},
-  {"time":283.19999998807907,"velocity":127,"sticking":""},
-  {"time":583,"velocity":51.560509554140125,"sticking":""},
-  {"time":812.5,"velocity":33.904458598726116,"sticking":""}]
-
-function score(pattern, match, velocityWeight, stickingWeight) {
-  function square(x) { return x * x; }
-  var dynamics = 0; // velocity matching
-  var timing = 0; // timing + penalties
-  var reuseCount = 0;
-  var gapCount = 0;
-  var stickingCount = 0;
-  var c = 0;
-  var alreadyMatched = [];
-  var start = pattern[0].time; // pattern start
-  var end = match[match.length - 1].time;
-  // Discard match notes older than the decay window relative to the last note
-  var recentCutoff = end - SCORE_DECAY_MS;
-  var filtered = match.filter((m) => m.time >= recentCutoff);
-    if (!filtered.length) return { dynamics: Number.MAX_VALUE, timing: Number.MAX_VALUE, reuseCount: reuseCount, gapCount: gapCount, stickingCount: stickingCount };
-  match = filtered;
-  for (var i = 0; i < match.length; i++) {
-    var m = match[i];
-    if (end - m.time > NOTE_AGE_CUTOFF_MS) {
-      break;
-    }
-    var d = Number.MAX_VALUE;
-    var pj = -1;
-    var timeTerm = 0;
-    var velTerm = 0;
-    var stickPenalty = 0;
-    var bestStickMismatch = 0;
-    for (var j = 0; j < pattern.length; j++) {
-      var pp = pattern[j];
-      var dd = square(pp.time - m.time);
-      if (dd < d) {
-        const stickingMismatch = (m.sticking === '' || pp.sticking == m.sticking) ? 0 : 1;
-        stickPenalty = stickingMismatch ? (stickingWeight * STICKING_MISMATCH_BASE) : 0;
-        timeTerm = dd;
-        velTerm = square(pp.velocity - m.velocity) * velocityWeight;
-        d = dd + velTerm + stickPenalty;
-        pj = j;
-        bestStickMismatch = stickingMismatch;
-      }
-    }
-    if (pj >= 0 && alreadyMatched[pj]) {
-      // Track reuse of the same pattern beat (extra hits)
-      reuseCount++;
-    }
-    if (pj >= 0) {
-      alreadyMatched[pj] = true;
-      stickingCount += bestStickMismatch;
-    }
-    // Weight by exponential growth: notes closer to pattern start have near-zero weight,
-    // notes toward the end have higher weight. Uses (1 - exp(-t)) to approach 1 asymptotically
-    var timeFromStart = m.time - start;
-    var weight = 1 - Math.exp(-timeFromStart / SCORE_DECAY_MS); // approaches 1 as time increases
-    timing += (timeTerm + stickPenalty) * weight;
-    dynamics += velTerm * weight;
-    c++;
-  }
-  // Penalize gaps: pattern beats between the first and last matched beat that remain unmatched
-  var firstIdx = -1;
-  var lastIdx = -1;
-  for (var k = 0; k < pattern.length; k++) {
-    if (alreadyMatched[k]) {
-      if (firstIdx === -1) firstIdx = k;
-      lastIdx = k;
-    }
-  }
-  if (firstIdx !== -1 && lastIdx > firstIdx) {
-    var gapUnmatched = 0;
-    for (var k2 = firstIdx; k2 <= lastIdx; k2++) {
-      if (!alreadyMatched[k2]) gapUnmatched++;
-    }
-    if (gapUnmatched > 0) {
-      // Track unmatched beats within the matched window (misses)
-      gapCount += gapUnmatched;
-    }
-  }
-  if (c === 0) return { dynamics: Number.MAX_VALUE, timing: Number.MAX_VALUE, reuseCount: reuseCount, gapCount: gapCount, stickingCount: stickingCount };
-
-  var norm = c;
-  var baseDynamics = Math.sqrt(dynamics / norm);
-  var baseTiming = Math.sqrt(timing / norm);
-
-  if (reuseCount > 0 || gapCount > 0) {
-    // Drastically inflate timing so penalized candidates sort last
-    const penalty = DISQUALIFIED_SCORE + (reuseCount + gapCount) * 1e10;
-    return {
-      dynamics: baseDynamics,
-      timing: baseTiming + penalty,
-      reuseCount: reuseCount,
-      gapCount: gapCount,
-      stickingCount: stickingCount
+  <script>
+    // Drum note lookup table
+    const drumMap = {
+      // Snare (normal)
+      38: 'Snare Head',
+      40: 'Snare Rim',
+      23: 'Snare Brush',
+      37: 'Snare XStick',
+      // Snare (wires off)
+      19: 'Snare Head (wires off)',
+      18: 'Snare Rim (wires off)',
+      16: 'Snare Brush (wires off)',
+      17: 'Snare XStick (wires off)',
+      // Wire lever
+      20: 'Wires Off',
+      21: 'Wires On',
     };
-  }
 
-  return {
-    dynamics: baseDynamics,
-    timing: baseTiming,
-    reuseCount: reuseCount,
-    gapCount: gapCount,
-    stickingCount: stickingCount
-  };
-}
+    // CC name lookup
+    const ccMap = {
+      16: 'Radius',
+      80: 'Angle',
+      88: 'Fine Velocity',
+    };
 
-function scaleTime(pattern, factor) { // assumes 0 origin time
-  var scaled = [];
-  for (var i = 0; i < pattern.length; i++) {
-    var p = pattern[i];
-    scaled.push({
-      time: p.time * factor,
-      velocity: p.velocity,
-      sticking: p.sticking
-    });
-  }
-  return scaled;
-}
-
-function scaleVelocity(pattern, factor, vmin = 32, vmax = 127) {
-  var scaled = [];
-  for (var i = 0; i < pattern.length; i++) {
-    var p = pattern[i];
-    var v = Number(p.velocity || 0) * factor;
-    v = Math.max(vmin, Math.min(vmax, v));
-    scaled.push({
-      time: p.time,
-      velocity: v,
-      sticking: p.sticking
-    });
-  }
-  return scaled;
-}
-
-function toNumericVelocity(v) {
-  if (typeof v === 'number') return v;
-  const up = String(v || '').toUpperCase();
-  if (up === 'ACCENT' || up === 'A') return 127;
-  if (up === 'GHOST' || up === 'G') return 32;
-  // treat normal, space, empty, undefined as normal
-  return 64;
-}
-
-// ========== JSON PATTERN DSL ==========
-// Each pattern is an array of note objects:
-// {
-//   type: 'note' | 'double' | 'flam' | 'drag' | 'rest',
-//   hand: 'R' | 'L',           // sticking (for note/double/flam/drag main note)
-//   dur: 16 | 8 | 4 | 2 | 1,   // duration: 16=sixteenth, 8=eighth, 4=quarter, 2=half, 1=whole
-//   vel: 'accent' | 'normal' | 'ghost'  // velocity/dynamics (optional, default 'normal')
-// }
-// For compound rudiments (flam, drag, double):
-//   - flam: grace note is opposite hand, main note uses 'hand' and 'vel'
-//   - drag: two grace notes opposite hand, main note uses 'hand' and 'vel'
-//   - double: two notes same hand, first can have 'vel', second is normal
-
-// Shorthand helpers for concise pattern entry
-const R = 'R', L = 'L';
-const ACCENT = 'accent', GHOST = 'ghost', NORMAL = 'normal';
-
-// Parse JSON pattern definition into timed events
-// Returns array of { time, velocity, sticking }
-function parsePatternJSON(notes, beatMs = 256, opts = {}) {
-  if (!notes || !Array.isArray(notes)) return [];
-  const { repeat = false } = opts;
-  const events = [];
-  let t = 0;
-  let hitCount = 0;
-
-  // Convert duration to ms (beatMs = one sixteenth note)
-  const durToMs = (dur) => {
-    switch (dur) {
-      case 1: return beatMs * 16;  // whole
-      case 2: return beatMs * 8;   // half
-      case 4: return beatMs * 4;   // quarter
-      case 8: return beatMs * 2;   // eighth
-      case 12: return beatMs * 4 / 3; // triplet eighth (3 per beat)
-      case 16: default: return beatMs; // sixteenth
-    }
-  };
-
-  for (const n of notes) {
-    const type = n.type || 'note';
-    const hand = n.hand || 'R';
-    const dur = n.dur || 16;
-    const vel = n.vel || 'normal';
-    const durMs = durToMs(dur);
-
-    if (type === 'rest') {
-      t += durMs;
-      continue;
+    // Note name conversion
+    const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    function midiNoteToName(note) {
+      const octave = Math.floor(note / 12) - 1;
+      const name = noteNames[note % 12];
+      return `${name}${octave}`;
     }
 
-    if (type === 'note') {
-      events.push({ time: t, velocity: vel, sticking: hand });
-      t += durMs;
-      hitCount++;
-      continue;
+    // State
+    let lastMessageTime = 0;
+    const BURST_TIMEOUT_MS = 1000;
+    let detectedChannel = null;
+    let isNewBurst = true;
+
+    const logBody = document.getElementById('logBody');
+    const connectionStatus = document.getElementById('connectionStatus');
+    const deviceNameEl = document.getElementById('deviceName');
+    const channelDisplay = document.getElementById('channelDisplay');
+
+    function formatRaw(data) {
+      return Array.from(data).map(b => '0x' + b.toString(16).padStart(2, '0')).join(' ');
     }
 
-    if (type === 'double') {
-      // Two notes same hand, evenly spaced within duration
-      // First note gets the specified velocity, second is normal
-      const spacing = durMs / 2;
-      events.push({ time: t, velocity: vel, sticking: hand });
-      events.push({ time: t + spacing, velocity: 'normal', sticking: hand });
-      t += durMs;
-      hitCount += 2;
-      continue;
-    }
-
-    if (type === 'flam') {
-      // Grace note (opposite hand) + main note (specified hand and velocity)
-      const graceHand = hand === 'R' ? 'L' : 'R';
-      events.push({ time: t, velocity: 'normal', sticking: graceHand });
-      events.push({ time: t + FLAM_OFFSET_MS, velocity: vel, sticking: hand });
-      t += durMs;
-      hitCount += 2;
-      continue;
-    }
-
-    if (type === 'drag') {
-      // Two grace notes (opposite hand) + main note (specified hand and velocity)
-      const graceHand = hand === 'R' ? 'L' : 'R';
-      events.push({ time: t, velocity: 'ghost', sticking: graceHand });
-      events.push({ time: t + DRAG_OFFSET_MS, velocity: 'ghost', sticking: graceHand });
-      events.push({ time: t + DRAG_OFFSET_MS * 2, velocity: vel, sticking: hand });
-      t += durMs;
-      hitCount += 3;
-      continue;
-    }
-  }
-
-  if (!repeat || events.length === 0 || t <= 0 || hitCount <= 0) return events;
-
-  // Repeat pattern to cover match buffer with room for alignment
-  // With wrapping at visual cycle boundaries, 2x match buffer is sufficient
-  const minHits = MAX_MATCH_BEATS * 2;
-  const repeats = Math.max(2, Math.ceil(minHits / hitCount));
-  const extended = [];
-  for (let r = 0; r < repeats; r++) {
-    const offset = r * t;
-    for (const e of events) {
-      extended.push({ time: e.time + offset, velocity: e.velocity, sticking: e.sticking });
-    }
-  }
-  return extended;
-}
-
-// Pattern definitions using JSON structure
-// Each pattern has: notes (array), beats (optional bar length)
-const PATTERN_DEFS = {
-  "Single Stroke Roll": {
-    notes: [
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
-    ]
-  },
-  "Double Stroke Roll": {
-    notes: [
-      { type: 'double', hand: R, dur: 16 },
-      { type: 'double', hand: L, dur: 16 },
-    ]
-  },
-  "Five Stroke Roll (Right)": {
-    beamGroup: 3,
-    notes: [
-      { type: 'double', hand: R, dur: 16 },
-      { type: 'double', hand: L, dur: 16 },
-      { type: 'note', hand: R, dur: 8, vel: ACCENT },
-    ]
-  },
-  "Five Stroke Roll (Left)": {
-    beamGroup: 3,
-    notes: [
-      { type: 'double', hand: L, dur: 16 },
-      { type: 'double', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 8, vel: ACCENT },
-    ]
-  },
-  "Five Stroke Roll (Alternating)": {
-    beamGroup: 3,
-    notes: [
-      { type: 'double', hand: R, dur: 16 },
-      { type: 'double', hand: L, dur: 16 },
-      { type: 'note', hand: R, dur: 8, vel: ACCENT },
-      { type: 'double', hand: L, dur: 16 },
-      { type: 'double', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 8, vel: ACCENT },
-    ]
-  },
-  "Single Paradiddle": {
-    notes: [
-      { type: 'note', hand: R, dur: 16, vel: ACCENT },
-      { type: 'note', hand: L, dur: 16 },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16, vel: ACCENT },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
-    ]
-  },
-  "Double Paradiddle": {
-    time: 3,
-    beamGroup: 6,
-    notes: [
-      { type: 'note', hand: R, dur: 16, vel: ACCENT },
-      { type: 'note', hand: L, dur: 16 },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16, vel: ACCENT },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
-    ]
-  },
-  "Triple Paradiddle": {
-    beamGroup: 8,
-    notes: [
-      { type: 'note', hand: R, dur: 16, vel: ACCENT },
-      { type: 'note', hand: L, dur: 16 },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16, vel: ACCENT },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
-    ]
-  },
-  "Flam (Right)": {
-    notes: [
-      { type: 'flam', hand: R, dur: 4 },
-    ]
-  },
-  "Flam (Left)": {
-    notes: [
-      { type: 'flam', hand: L, dur: 4 },
-    ]
-  },
-  "Flam (Alternating)": {
-    notes: [
-      { type: 'flam', hand: R, dur: 4 },
-      { type: 'flam', hand: L, dur: 4 },
-    ]
-  },
-  "Flam Accent": {
-    notes: [
-      { type: 'flam', hand: R, dur: 12, vel: ACCENT },
-      { type: 'note', hand: L, dur: 12 },
-      { type: 'note', hand: R, dur: 12 },
-      { type: 'flam', hand: L, dur: 12, vel: ACCENT },
-      { type: 'note', hand: R, dur: 12 },
-      { type: 'note', hand: L, dur: 12 },
-    ]
-  },
-  "Drag (Right)": {
-    notes: [
-      { type: 'drag', hand: R, dur: 4 },
-    ]
-  },
-  "Drag (Left)": {
-    notes: [
-      { type: 'drag', hand: L, dur: 4 },
-    ]
-  },
-  "Drag (Alternating)": {
-    notes: [
-      { type: 'drag', hand: R, dur: 4 },
-      { type: 'drag', hand: L, dur: 4 },
-    ]
-  },
-  "Flam Tap (Right)": {
-    notes: [
-      { type: 'flam', hand: R, dur: 8, vel: ACCENT },
-      { type: 'note', hand: L, dur: 8 },
-    ]
-  },
-  "Flam Tap (Left)": {
-    notes: [
-      { type: 'flam', hand: L, dur: 8, vel: ACCENT },
-      { type: 'note', hand: R, dur: 8 },
-    ]
-  },
-  "Flam Tap (Alternating)": {
-    notes: [
-      { type: 'flam', hand: R, dur: 8, vel: ACCENT },
-      { type: 'note', hand: L, dur: 8 },
-      { type: 'flam', hand: L, dur: 8, vel: ACCENT },
-      { type: 'note', hand: R, dur: 8 },
-    ]
-  },
-  "Down-Up-Tap Triplets": {
-    notes: [
-      { type: 'note', hand: R, dur: 12, vel: ACCENT, label: 'D' },
-      { type: 'note', hand: L, dur: 12, label: 'U' },
-      { type: 'note', hand: R, dur: 12, label: 'T' },
-      { type: 'note', hand: L, dur: 12, vel: ACCENT, label: 'D' },
-      { type: 'note', hand: R, dur: 12, label: 'U' },
-      { type: 'note', hand: L, dur: 12, label: 'T' },
-      { type: 'note', hand: R, dur: 12, vel: ACCENT, label: 'D' },
-      { type: 'note', hand: L, dur: 12, label: 'U' },
-      { type: 'note', hand: R, dur: 12, label: 'T' },
-      { type: 'note', hand: L, dur: 12, vel: ACCENT, label: 'D' },
-      { type: 'note', hand: R, dur: 12, label: 'U' },
-      { type: 'note', hand: L, dur: 12, label: 'T' },
-    ]
-  },
-};
-
-// Build PATTERN_LIBRARY from PATTERN_DEFS
-const PATTERN_LIBRARY = {};
-for (const [name, def] of Object.entries(PATTERN_DEFS)) {
-  PATTERN_LIBRARY[name] = parsePatternJSON(def.notes, 256, { repeat: true });
-}
-
-const DEFAULT_PATTERN_KEY = 'paradiddle';
-
-function setPattern(name, renderPatternOnly = true, preserveProgress = false) {
-  const resolvedName = PATTERN_LIBRARY[name] ? name : DEFAULT_PATTERN_KEY;
-  const pat = PATTERN_LIBRARY[resolvedName] || PATTERN_LIBRARY[DEFAULT_PATTERN_KEY];
-  window._extendedPattern = pat;
-  
-  // Only reset progress if switching to a different pattern and not preserving
-  if (!preserveProgress || window._currentPatternName !== resolvedName) {
-    window._lastMatchedPatternIdx = null;
-    window._noteErrors = {}; // clear timing errors when pattern changes
-  }
-  window._currentPatternName = resolvedName;
-
-  const title = document.getElementById('patternTitle');
-  if (title) title.textContent = resolvedName;
-
-  const select = document.getElementById('patternSelect');
-  if (select && select.value !== resolvedName && PATTERN_LIBRARY[resolvedName]) {
-    select.value = resolvedName;
-  }
-
-  // Render the musical notation for this pattern
-  renderNotation(resolvedName);
-
-  if (renderPatternOnly) {
-    renderPatternMatch(window._extendedPattern, [], 1, 0);
-  }
-}
-
-function populatePatternMenu() {
-  const select = document.getElementById('patternSelect');
-  if (!select) return;
-  select.innerHTML = '';
-  Object.keys(PATTERN_LIBRARY).forEach((key) => {
-    const opt = document.createElement('option');
-    opt.value = key;
-    opt.textContent = key;
-    select.appendChild(opt);
-  });
-  select.value = DEFAULT_PATTERN_KEY;
-  select.addEventListener('change', (evt) => {
-    const name = evt.target.value;
-    setPattern(name, true);
-    if (window._matchBuffer && window._matchBuffer.length > 0) {
-      const firstTime = window._matchBuffer[0].time;
-      const normalized = window._matchBuffer.map((m) => ({ time: m.time - firstTime, velocity: m.velocity, sticking: m.sticking }));
-      // Run search only against the selected pattern so the user choice is respected
-      search(window._extendedPattern, normalized, 1, 1, { render: true, patternName: name });
-    }
-  });
-}
-
-function trimMatchAfterLargeGap(match) {
-  if (!match || match.length < 3) return match;
-  const gaps = [];
-  for (let i = 0; i < match.length - 1; i++) {
-    const gap = match[i + 1].time - match[i].time;
-    if (gap > 0) gaps.push(gap);
-  }
-  if (gaps.length < 2) return match;
-  const mean = gaps.reduce((s, g) => s + g, 0) / gaps.length;
-  const variance = gaps.reduce((s, g) => s + Math.pow(g - mean, 2), 0) / gaps.length;
-  const sd = Math.sqrt(variance);
-  const threshold = mean + 2 * sd; // heuristic: keep if gap is within two std devs
-  for (let i = 0; i < match.length - 1; i++) {
-    const gap = match[i + 1].time - match[i].time;
-    if (gap > threshold) {
-      return match.slice(i + 1); // drop everything before the large gap
-    }
-  }
-  return match;
-}
-
-function translateTime(pattern, offset) {
-  var translated = [];
-  for (var i = 0; i < pattern.length; i++) {
-    var p = pattern[i];
-    translated.push({
-      time: p.time + offset,
-      velocity: p.velocity,
-      sticking: p.sticking
-    });
-  }
-  return translated;
-}
-
-// ========== NOTATION RENDERING (SVG) ==========
-// SVG helpers for musical notation rendering
-function createSvgElement(tag) {
-  return document.createElementNS("http://www.w3.org/2000/svg", tag);
-}
-
-function makeSvg(width, height) {
-  const svg = createSvgElement("svg");
-  svg.setAttribute("width", width);
-  svg.setAttribute("height", height);
-  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-  svg.setAttribute("fill", "none");
-  return svg;
-}
-
-function makeLine(x1, y1, x2, y2, strokeWidth, color) {
-  const line = createSvgElement("line");
-  line.setAttribute("x1", x1);
-  line.setAttribute("y1", y1);
-  line.setAttribute("x2", x2);
-  line.setAttribute("y2", y2);
-  line.setAttribute("stroke", color);
-  line.setAttribute("stroke-width", strokeWidth);
-  line.setAttribute("stroke-linecap", "round");
-  return line;
-}
-
-function makeText(x, y, text, size, anchor, color) {
-  const t = createSvgElement("text");
-  t.setAttribute("x", x);
-  t.setAttribute("y", y);
-  t.setAttribute("fill", color);
-  t.setAttribute("font-size", size);
-  t.setAttribute("font-family", "sans-serif");
-  t.setAttribute("text-anchor", anchor || "start");
-  t.textContent = text;
-  return t;
-}
-
-function makeNotehead(x, y, fill, rx = 9, ry = 6.5, angleRad = -25 * Math.PI / 180) {
-  const head = createSvgElement("ellipse");
-  head.setAttribute("cx", x);
-  head.setAttribute("cy", y);
-  head.setAttribute("rx", rx);
-  head.setAttribute("ry", ry);
-  head.setAttribute("fill", fill);
-  head.setAttribute("transform", `rotate(${angleRad * 180 / Math.PI} ${x} ${y})`);
-  return head;
-}
-
-function makeGhostParens(x, y, ry, color, strokeWidth = 1.5) {
-  // Draw parentheses around the notehead for ghost notes
-  const g = createSvgElement("g");
-  const offset = 14; // horizontal offset from note center
-  const height = ry * 2.2;
-  // Left paren
-  const leftParen = createSvgElement("path");
-  leftParen.setAttribute("d", `M ${x - offset + 4} ${y - height / 2} Q ${x - offset - 2} ${y}, ${x - offset + 4} ${y + height / 2}`);
-  leftParen.setAttribute("stroke", color);
-  leftParen.setAttribute("stroke-width", strokeWidth);
-  leftParen.setAttribute("fill", "none");
-  leftParen.setAttribute("stroke-linecap", "round");
-  g.appendChild(leftParen);
-  // Right paren
-  const rightParen = createSvgElement("path");
-  rightParen.setAttribute("d", `M ${x + offset - 4} ${y - height / 2} Q ${x + offset + 2} ${y}, ${x + offset - 4} ${y + height / 2}`);
-  rightParen.setAttribute("stroke", color);
-  rightParen.setAttribute("stroke-width", strokeWidth);
-  rightParen.setAttribute("fill", "none");
-  rightParen.setAttribute("stroke-linecap", "round");
-  g.appendChild(rightParen);
-  return g;
-}
-
-function makeStem(x, yStart, length, color) {
-  const stem = createSvgElement("line");
-  stem.setAttribute("x1", x);
-  stem.setAttribute("y1", yStart);
-  stem.setAttribute("x2", x);
-  stem.setAttribute("y2", yStart - length);
-  stem.setAttribute("stroke", color);
-  stem.setAttribute("stroke-width", 2);
-  stem.setAttribute("stroke-linecap", "round");
-  return stem;
-}
-
-function makeAccentMark(x, y, color) {
-  const accent = createSvgElement("path");
-  const w = 7;  // half-width (horizontal extent)
-  const h = 6;  // half-height (vertical extent) - wider angle like gator's mouth
-  // Open ">" accent mark
-  accent.setAttribute("d", `M ${x - w} ${y - h} L ${x + w} ${y} L ${x - w} ${y + h}`);
-  accent.setAttribute("fill", "none");
-  accent.setAttribute("stroke", color);
-  accent.setAttribute("stroke-width", 2.5);
-  accent.setAttribute("stroke-linecap", "round");
-  accent.setAttribute("stroke-linejoin", "round");
-  return accent;
-}
-
-function makeFlag(x, yTop, color) {
-  // 16th note flag curving to the right from top of stem
-  const flag = createSvgElement("path");
-  flag.setAttribute("d", `M ${x} ${yTop} Q ${x + 8} ${yTop + 6}, ${x + 4} ${yTop + 14}`);
-  flag.setAttribute("fill", "none");
-  flag.setAttribute("stroke", color);
-  flag.setAttribute("stroke-width", 2);
-  flag.setAttribute("stroke-linecap", "round");
-  return flag;
-}
-
-function makeStemSlash(x, yMid, color) {
-  // Small diagonal slash through stem to indicate double/roll
-  const slash = createSvgElement("line");
-  const slashLen = 10;
-  slash.setAttribute("x1", x - slashLen / 2);
-  slash.setAttribute("y1", yMid + slashLen / 2);
-  slash.setAttribute("x2", x + slashLen / 2);
-  slash.setAttribute("y2", yMid - slashLen / 2);
-  slash.setAttribute("stroke", color);
-  slash.setAttribute("stroke-width", 4); // same as beam thickness
-  slash.setAttribute("stroke-linecap", "round");
-  return slash;
-}
-
-function makeQuarterRest(x, y, color) {
-  // Quarter rest - a stylized zigzag shape
-  const rest = createSvgElement("path");
-  // Classic quarter rest shape
-  const h = 24;
-  rest.setAttribute("d", `M ${x} ${y - h/2} 
-    L ${x + 5} ${y - h/4} 
-    L ${x - 3} ${y} 
-    L ${x + 5} ${y + h/4} 
-    Q ${x - 2} ${y + h/3}, ${x + 2} ${y + h/2}`);
-  rest.setAttribute("fill", "none");
-  rest.setAttribute("stroke", color);
-  rest.setAttribute("stroke-width", 2.5);
-  rest.setAttribute("stroke-linecap", "round");
-  rest.setAttribute("stroke-linejoin", "round");
-  return rest;
-}
-
-function makeBeamRect(xStart, xEnd, yRef, thickness, color) {
-  const rect = createSvgElement("rect");
-  const x = Math.min(xStart, xEnd) - 1;
-  const width = Math.abs(xEnd - xStart) + 2;
-  rect.setAttribute("x", x);
-  rect.setAttribute("y", yRef - thickness);
-  rect.setAttribute("width", width);
-  rect.setAttribute("height", thickness);
-  rect.setAttribute("fill", color);
-  rect.setAttribute("rx", "1.5");
-  rect.setAttribute("ry", "1.5");
-  return rect;
-}
-
-function stemAnchor(rx, ry, angleRad) {
-  // Calculate stem attachment point on rotated ellipse
-  const sinA = Math.sin(angleRad);
-  const cosA = Math.cos(angleRad);
-  const t = Math.atan(-(ry * sinA) / (rx * cosA));
-  const x = rx * Math.cos(t);
-  const y = ry * Math.sin(t);
-  const X = x * cosA - y * sinA;
-  const Y = x * sinA + y * cosA;
-  return { offsetX: Math.abs(X), offsetY: Y };
-}
-
-// Render notation SVG from the pattern notes (one cycle only).
-// Returns an SVG element.
-function renderNotationSVG(patternName, width = 1180, height = 120) {
-  // Get pattern definition from PATTERN_DEFS (single source of truth)
-  const def = PATTERN_DEFS[patternName];
-  if (!def || !def.notes) return null;
-  
-  // Convert duration to slots (sixteenth note = 1 slot)
-  // For triplets, we use fractional slots that sum to the beat
-  const durToSlots = (dur) => {
-    switch (dur) {
-      case 1: return 16;  // whole
-      case 2: return 8;   // half
-      case 4: return 4;   // quarter
-      case 8: return 2;   // eighth
-      case 12: return 4/3; // triplet eighth (3 per beat = 4 slots / 3)
-      case 16: default: return 1; // sixteenth
-    }
-  };
-  
-  // Convert velocity string to notation velocity
-  const velToNotation = (vel) => {
-    if (vel === ACCENT || vel === 'accent') return 'A';
-    if (vel === GHOST || vel === 'ghost') return 'G';
-    return 'N';
-  };
-  
-  // Calculate slots and counts for one cycle of notes
-  let slotsPerCycle = 0;
-  let notesPerCycle = 0;
-  let accentsPerCycle = 0;
-  let hitsPerCycle = 0; // number of pattern hits (for highlighting wrap-around)
-  let hasTriplets = false;
-  
-  for (const n of def.notes) {
-    const type = n.type || 'note';
-    const dur = n.dur || 16;
-    const vel = n.vel || 'normal';
-    slotsPerCycle += durToSlots(dur);
-    
-    if (dur === 12) hasTriplets = true;
-    
-    if (type !== 'rest') {
-      notesPerCycle++;
-      if (vel === ACCENT || vel === 'accent') accentsPerCycle++;
-      // Count hits per pattern type
-      if (type === 'note') hitsPerCycle += 1;
-      else if (type === 'double') hitsPerCycle += 2;
-      else if (type === 'flam') hitsPerCycle += 2;
-      else if (type === 'drag') hitsPerCycle += 3;
-    }
-  }
-  
-  // Use time signature (beats per measure) if defined, otherwise default to 4 beats
-  // Each beat = 4 sixteenth-note slots
-  const beatsPerMeasure = def.time || 4;
-  const totalSlots = Math.max(beatsPerMeasure * 4, slotsPerCycle);
-  
-  // Calculate how many times to repeat the pattern to fill the bar
-  const repeatsNeeded = slotsPerCycle > 0 ? Math.ceil(totalSlots / slotsPerCycle) : 1;
-  
-  // Parse notes into events with slot positions
-  // Also track patternHitIdx to map notation elements to pattern hits
-  const events = [];
-  let slot = 0;
-  let patternHitIdx = 0;
-  
-  for (let rep = 0; rep < repeatsNeeded; rep++) {
-    for (const n of def.notes) {
-      // Stop if we've filled all slots
-      if (slot >= totalSlots) break;
+    function addLogEntry(type, channel, note, name, value, drum, raw, cssClass) {
+      const now = performance.now();
+      const timeSinceLastMsg = now - lastMessageTime;
       
-      const type = n.type || 'note';
-      const hand = n.hand || 'R';
-      const dur = n.dur || 16;
-      const vel = n.vel || 'normal';
-      const slots = durToSlots(dur);
-      const notationVel = velToNotation(vel);
-      
-      if (type === 'rest') {
-        if (slots >= 4) {
-          events.push({ slot, isRest: true, restType: 'quarter' });
-        }
-        slot += slots;
-        continue;
+      // Check for burst timeout - if > 1 second since last message, clear log
+      if (lastMessageTime > 0 && timeSinceLastMsg > BURST_TIMEOUT_MS) {
+        logBody.innerHTML = '';
+        isNewBurst = true;
       }
       
-      if (type === 'note') {
-        const isAccent = vel === ACCENT || vel === 'accent';
-        const hitIdx = patternHitIdx++;
-        events.push({ 
-          slot, 
-          velocity: notationVel, 
-          sticking: hand, 
-          isAccent,
-          dur,
-          label: n.label || null,
-          patternHitIdx: hitIdx,
-          errorAnchorIdx: hitIdx // regular notes anchor to themselves
-        });
-        slot += slots;
-        continue;
-      }
-      
-      if (type === 'double') {
-        // Double: one note with slash (takes full duration)
-        // Pattern has 2 hits: first hit, second hit - both anchor to first for errors
-        const isAccent = vel === ACCENT || vel === 'accent';
-        const firstHit = patternHitIdx++;
-        const secondHit = patternHitIdx++;
-        events.push({ 
-          slot, 
-          velocity: notationVel, 
-          sticking: hand, 
-          isDouble: true, 
-          isAccent,
-          dur,
-          label: n.label || null,
-          patternHitIdx: firstHit,
-          patternHitIdx2: secondHit,
-          errorAnchorIdx: firstHit // both hits anchor to main note for errors
-        });
-        slot += slots;
-        continue;
-      }
-      
-      if (type === 'flam') {
-        // Flam: grace note (opposite hand) + main note
-        // Pattern has 2 hits: grace note, main note - both anchor to main for errors
-        const graceHand = hand === 'R' ? 'L' : 'R';
-        const isAccent = vel === ACCENT || vel === 'accent';
-        const graceHit = patternHitIdx++;
-        const mainHit = patternHitIdx++;
-        events.push({ slot, velocity: 'N', sticking: graceHand, isGrace: true, isFlam: true, hideLabel: true, graceOffset: -24, patternHitIdx: graceHit, errorAnchorIdx: mainHit });
-        events.push({ slot, velocity: notationVel, sticking: hand, isGrace: false, isFlam: true, isAccent, dur, patternHitIdx: mainHit, errorAnchorIdx: mainHit });
-        slot += slots;
-        continue;
-      }
-      
-      if (type === 'drag') {
-        // Drag: two grace notes (opposite hand) + main note
-        // Pattern has 3 hits: grace1, grace2, main - all anchor to main for errors
-        const graceHand = hand === 'R' ? 'L' : 'R';
-        const isAccent = vel === ACCENT || vel === 'accent';
-        const grace1Hit = patternHitIdx++;
-        const grace2Hit = patternHitIdx++;
-        const mainHit = patternHitIdx++;
-        events.push({ slot, velocity: 'N', sticking: graceHand, isGrace: true, isDragGrace: true, dragIdx: 0, hideLabel: true, graceOffset: -38, patternHitIdx: grace1Hit, errorAnchorIdx: mainHit });
-        events.push({ slot, velocity: 'N', sticking: graceHand, isGrace: true, isDragGrace: true, dragIdx: 1, hideLabel: true, graceOffset: -24, patternHitIdx: grace2Hit, errorAnchorIdx: mainHit });
-        events.push({ slot, velocity: notationVel, sticking: hand, isGrace: false, isDrag: true, isAccent, dur, patternHitIdx: mainHit, errorAnchorIdx: mainHit });
-        slot += slots;
-        continue;
-      }
-    }
-    if (slot >= totalSlots) break;
-  }
-  
-  if (!events.length) return null;
+      lastMessageTime = now;
 
-  const svg = makeSvg(width, height);
-  
-  // Create gradient for cursor bar (fades to transparent on edges)
-  const defs = createSvgElement('defs');
-  const gradient = createSvgElement('linearGradient');
-  gradient.setAttribute('id', 'cursorGradient');
-  gradient.setAttribute('x1', '0%');
-  gradient.setAttribute('x2', '100%');
-  const stop1 = createSvgElement('stop');
-  stop1.setAttribute('offset', '0%');
-  stop1.setAttribute('stop-color', '#cc4444');
-  stop1.setAttribute('stop-opacity', '0');
-  const stop2 = createSvgElement('stop');
-  stop2.setAttribute('offset', '40%');
-  stop2.setAttribute('stop-color', '#cc4444');
-  stop2.setAttribute('stop-opacity', '0.4');
-  const stop3 = createSvgElement('stop');
-  stop3.setAttribute('offset', '50%');
-  stop3.setAttribute('stop-color', '#cc4444');
-  stop3.setAttribute('stop-opacity', '0.5');
-  const stop4 = createSvgElement('stop');
-  stop4.setAttribute('offset', '60%');
-  stop4.setAttribute('stop-color', '#cc4444');
-  stop4.setAttribute('stop-opacity', '0.4');
-  const stop5 = createSvgElement('stop');
-  stop5.setAttribute('offset', '100%');
-  stop5.setAttribute('stop-color', '#cc4444');
-  stop5.setAttribute('stop-opacity', '0');
-  gradient.appendChild(stop1);
-  gradient.appendChild(stop2);
-  gradient.appendChild(stop3);
-  gradient.appendChild(stop4);
-  gradient.appendChild(stop5);
-  defs.appendChild(gradient);
-  svg.appendChild(defs);
-  
-  // Create cursor bar (behind everything, hidden initially)
-  const cursor = createSvgElement('rect');
-  cursor.setAttribute('id', 'notationCursor');
-  cursor.setAttribute('x', '0');
-  cursor.setAttribute('y', '0');
-  cursor.setAttribute('width', '40');
-  cursor.setAttribute('height', height);
-  cursor.setAttribute('fill', 'url(#cursorGradient)');
-  cursor.style.display = 'none';
-  svg.appendChild(cursor);
-  
-  // Colors for dark mode
-  const strokeColor = '#ffffff';
-  const accentColor = '#ffffff'; // white accents
-  const ghostColor = '#888888';
-  
-  const marginL = 40;
-  const marginR = 40;
-  const staffWidth = width - marginL - marginR;
-  const centerY = height / 2 + 30; // shifted down to make room for labels above
-  const lineThickness = 2;
-  
-  // Draw single staff line
-  svg.appendChild(makeLine(marginL, centerY, marginL + staffWidth, centerY, lineThickness, '#ffffff'));
-  
-  // Draw bar lines at start and end
-  const barLineHeight = 50; // vertical extent of bar lines
-  const barLineThickness = 4; // same as beam thickness
-  const barLineTop = centerY - barLineHeight / 2;
-  const barLineBottom = centerY + barLineHeight / 2;
-  // Start bar line
-  svg.appendChild(makeLine(marginL, barLineTop, marginL, barLineBottom, barLineThickness, '#ffffff'));
-  // End bar line
-  svg.appendChild(makeLine(marginL + staffWidth, barLineTop, marginL + staffWidth, barLineBottom, barLineThickness, '#ffffff'));
-  
-  // Add R/L labels to the left of the start bar line (R below, L above)
-  // Font size spans roughly half the bar line height for each letter
-  const rlFontSize = '20px';
-  const labelX = marginL - 16;
-  const labelOffset = 14; // equal offset above/below for symmetry
-  const labelBaselineShift = 4; // adjust for visual centering
-  const labelL = makeText(labelX, centerY - labelOffset + labelBaselineShift, 'L', rlFontSize, 'middle', '#ffffff');
-  labelL.setAttribute('font-weight', 'bold');
-  svg.appendChild(labelL);
-  const labelR = makeText(labelX, centerY + labelOffset + labelBaselineShift, 'R', rlFontSize, 'middle', '#ffffff');
-  labelR.setAttribute('font-weight', 'bold');
-  svg.appendChild(labelR);
-  
-  const headRx = 8;
-  const headRy = 5.5;
-  const graceRx = 5;
-  const graceRy = 3.5;
-  const angleRad = -25 * Math.PI / 180;
-  const minStem = 42;
-  const beamY = centerY - 54; // top of beams
-  const beamThickness = 4;
-  const accentOffset = 16; // space above stem for accent marks
-  // Fixed Y position for note labels - above everything (beams, accents, triplet markers)
-  const noteLabelY = beamY - 38;
-  const anchor = stemAnchor(headRx, headRy, angleRad);
-  const graceAnchor = stemAnchor(graceRx, graceRy, angleRad);
-  
-  const placed = [];
-  const dragGraceNotes = []; // collect drag grace notes for beaming
-  
-  // Build hit map for cursor: patternHitIdx -> x position
-  const hitMap = {};
-  // Build error anchor map: patternHitIdx -> main note's patternHitIdx for error rendering
-  // For compound notes (doubles, flams, drags), all hits map to the main note
-  const errorAnchorMap = {};
-  // Build note info map: patternHitIdx -> { isGrace, graceOffset, sticking, x, y }
-  // Used for rendering errors with correct size and position
-  const noteInfoMap = {};
-  
-  // Padding inside the bar lines for notes
-  const visualGap = 45;
-  const notePadding = visualGap + headRx;
-  const noteAreaWidth = staffWidth - notePadding * 2;
-  
-  // Slot-based positioning: evenly space notes across the bar
-  // Each slot is 1 sixteenth note position
-  const slotWidth = noteAreaWidth / (totalSlots - 1 || 1);
-  
-  for (let i = 0; i < events.length; i++) {
-    const ev = events[i];
-    // Base x position from slot (evenly spaced)
-    let x = marginL + notePadding + ev.slot * slotWidth;
-    // Apply grace note offset (pixels to the left)
-    if (ev.graceOffset) {
-      x += ev.graceOffset;
-    }
-    
-    // Handle rests
-    if (ev.isRest) {
-      if (ev.restType === 'quarter') {
-        svg.appendChild(makeQuarterRest(x, centerY, strokeColor));
+      const tr = document.createElement('tr');
+      tr.className = cssClass;
+      
+      // Add separator styling for new bursts (except first entry)
+      if (isNewBurst && logBody.children.length > 0) {
+        tr.classList.add('burst-separator');
       }
-      continue;
-    }
-    
-    const isGrace = ev.isGrace || false;
-    const rx = isGrace ? graceRx : headRx;
-    const ry = isGrace ? graceRy : headRy;
-    const anch = isGrace ? graceAnchor : anchor;
-    
-    // Y position: R below line, L above line
-    const y = ev.sticking === 'R' 
-      ? centerY + ry + lineThickness / 2 + 2
-      : centerY - ry - lineThickness / 2 - 2;
-    
-    // Ghost notes are only actual G velocity notes, not drag grace notes
-    const isGhostNote = ev.velocity === 'G' && !ev.isDragGrace;
-    const isAccent = ev.velocity === 'A';
-    // Ghost notes use same color as regular notes (parentheses distinguish them)
-    const noteColor = strokeColor;
-    
-    // Draw notehead
-    const head = makeNotehead(x, y, noteColor, rx, ry, angleRad);
-    svg.appendChild(head);
-    
-    // Store x position for cursor (skip second hit of doubles)
-    if (ev.patternHitIdx !== undefined && hitMap[ev.patternHitIdx] === undefined) {
-      hitMap[ev.patternHitIdx] = x;
-    }
-    // Store error anchor mapping
-    if (ev.patternHitIdx !== undefined && ev.errorAnchorIdx !== undefined) {
-      errorAnchorMap[ev.patternHitIdx] = ev.errorAnchorIdx;
-    }
-    // Also map second hit of doubles to the anchor
-    if (ev.patternHitIdx2 !== undefined && ev.errorAnchorIdx !== undefined) {
-      errorAnchorMap[ev.patternHitIdx2] = ev.errorAnchorIdx;
-    }
-    // Store note info for error rendering (include dynamics info)
-    if (ev.patternHitIdx !== undefined) {
-      noteInfoMap[ev.patternHitIdx] = { 
-        isGrace, 
-        graceOffset: ev.graceOffset || 0, 
-        sticking: ev.sticking, 
-        x, y,
-        isAccent: ev.isAccent || false,
-        isGhost: isGhostNote,
-        velocity: ev.velocity // 'A', 'G', or 'N'
-      };
-    }
-    if (ev.patternHitIdx2 !== undefined) {
-      // Second hit of doubles - same position, normal velocity
-      noteInfoMap[ev.patternHitIdx2] = { 
-        isGrace: false, 
-        graceOffset: 0, 
-        sticking: ev.sticking, 
-        x, y,
-        isAccent: false,
-        isGhost: false,
-        velocity: 'N'
-      };
-    }
-    
-    // Draw ghost parentheses (only for actual ghost notes, not drag grace notes)
-    if (isGhostNote) {
-      svg.appendChild(makeGhostParens(x, y, ry, strokeColor, 1.5));
-    }
-    
-    // Draw stem
-    const stemX = x + anch.offsetX * 0.9;
-    const stemStartY = y + anch.offsetY;
-    const stemLen = isGrace ? 20 : Math.max(minStem, stemStartY - beamY + 1);
-    const stem = makeStem(stemX, stemStartY, stemLen, noteColor);
-    svg.appendChild(stem);
-    
-    // Draw flag on flam grace notes
-    if (ev.isFlam && isGrace) {
-      svg.appendChild(makeFlag(stemX, stemStartY - stemLen, strokeColor));
-    }
-    
-    // Draw slash on double notes - fixed Y position aligned across all notes
-    // For doubles, second hit (patternHitIdx2) doesn't move cursor - set to null
-    if (ev.isDouble) {
-      const slashY = beamY + 22;
-      svg.appendChild(makeStemSlash(stemX, slashY, strokeColor));
-      // Mark second hit to be skipped by cursor
-      if (ev.patternHitIdx2 !== undefined) {
-        hitMap[ev.patternHitIdx2] = null;
+      isNewBurst = false;
+
+      tr.innerHTML = `
+        <td class="col-type">${type}</td>
+        <td class="col-channel">${channel}</td>
+        <td class="col-note">${note}</td>
+        <td class="col-name">${name}</td>
+        <td class="col-value">${value}</td>
+        <td class="col-drum">${drum}</td>
+        <td class="col-raw">${raw}</td>
+      `;
+      
+      logBody.appendChild(tr);
+      
+      // Auto-scroll to bottom
+      const logDiv = document.getElementById('log');
+      logDiv.scrollTop = logDiv.scrollHeight;
+
+      // Update detected channel display
+      if (channel !== '-' && detectedChannel !== channel) {
+        detectedChannel = channel;
+        channelDisplay.textContent = channel;
       }
     }
-    
-    // Collect drag grace notes for beaming
-    if (ev.isDragGrace) {
-      dragGraceNotes.push({ x, stemX, stemEndY: stemStartY - stemLen, ev });
-      // Draw beam when we have a pair
-      if (dragGraceNotes.length >= 2) {
-        const last = dragGraceNotes.length - 1;
-        const prev = dragGraceNotes[last - 1];
-        const curr = dragGraceNotes[last];
-        // Only beam if they're consecutive (same drag)
-        if (prev.ev.dragIdx === 0 && curr.ev.dragIdx === 1) {
-          svg.appendChild(makeBeamRect(prev.stemX, curr.stemX, Math.min(prev.stemEndY, curr.stemEndY), 3, strokeColor));
-        }
-      }
-    }
-    
-    // Draw accent mark centered over notehead
-    if (isAccent) {
-      svg.appendChild(makeAccentMark(x, stemStartY - stemLen - accentOffset, accentColor));
-    }
-    
-    // Draw label above the note at fixed Y position (above everything), centered over stem
-    if (ev.label && !isGrace) {
-      const labelText = makeText(stemX, noteLabelY, ev.label, rlFontSize, 'middle', '#ffffff');
-      svg.appendChild(labelText);
-    }
-    
-    // Track for beaming (only non-grace notes that can be beamed)
-    if (!isGrace && ev.dur && ev.dur >= 8) {
-      placed.push({ x, stemX, stemEndY: beamY, dur: ev.dur });
-    }
-  }
-  
-  // Store hit map and cycle length globally
-  // patternHitIdx is the total number of hits displayed in the notation bar
-  window._notationHitMap = hitMap;
-  window._notationHitsPerCycle = patternHitIdx;
-  window._notationErrorAnchorMap = errorAnchorMap;
-  window._notationNoteInfoMap = noteInfoMap;
-  
-  // Draw beams connecting notes in groups
-  // Group by beat: 16ths → 4 per beat, 8ths → 2 per beat, triplets → 3 per beat
-  // Or use beamGroup property if defined for custom grouping (e.g., paradiddles)
-  // Number of beams per note: eighth (dur 8) = 1, sixteenth (dur 16) = 2, 32nd = 3
-  if (placed.length > 1) {
-    // Use beamGroup if defined, otherwise determine from duration
-    let notesPerGroup;
-    if (def.beamGroup) {
-      notesPerGroup = def.beamGroup;
-    } else {
-      // dur 16 = 4 per beat, dur 8 = 2 per beat, dur 12 (triplet) = 3 per beat
-      const firstDur = placed[0].dur || 16;
-      if (firstDur === 12) {
-        notesPerGroup = 3; // triplets
-      } else if (firstDur === 8) {
-        notesPerGroup = 2; // eighths
-      } else if (firstDur === 16) {
-        notesPerGroup = 4; // sixteenths
+
+    function handleMIDIMessage(event) {
+      const data = event.data || [];
+      if (data.length < 1) return;
+
+      const status = data[0];
+      const cmd = status & 0xf0;
+      const channel = (status & 0x0f) + 1;
+      const data1 = data[1];
+      const data2 = data[2];
+      const raw = formatRaw(data);
+
+      if (cmd === 0x90 && data2 > 0) {
+        // Note On
+        const noteName = midiNoteToName(data1);
+        const drumName = drumMap[data1] || '';
+        addLogEntry('Note On', channel, data1, noteName, data2, drumName, raw, 'note-on');
+      } else if (cmd === 0x90 && data2 === 0 || cmd === 0x80) {
+        // Note Off
+        const noteName = midiNoteToName(data1);
+        const drumName = drumMap[data1] || '';
+        addLogEntry('Note Off', channel, data1, noteName, data2, drumName, raw, 'note-off');
+      } else if (cmd === 0xb0) {
+        // CC
+        const ccName = ccMap[data1] || `CC ${data1}`;
+        addLogEntry('CC', channel, data1, ccName, data2, '', raw, 'cc');
+      } else if (cmd === 0xe0) {
+        // Pitch Bend
+        const bendValue = ((data2 << 7) | data1) - 8192;
+        addLogEntry('Pitch Bend', channel, '-', '', bendValue, '', raw, 'other');
+      } else if (cmd === 0xc0) {
+        // Program Change
+        addLogEntry('Program', channel, data1, '', '-', '', raw, 'other');
+      } else if (cmd === 0xd0) {
+        // Channel Pressure
+        addLogEntry('Pressure', channel, '-', '', data1, '', raw, 'other');
+      } else if (cmd === 0xa0) {
+        // Polyphonic Aftertouch
+        const noteName = midiNoteToName(data1);
+        addLogEntry('Poly AT', channel, data1, noteName, data2, '', raw, 'other');
+      } else if (status === 0xf8) {
+        // Timing clock - ignore (too spammy)
+      } else if (status === 0xfe) {
+        // Active sensing - ignore (too spammy)
       } else {
-        notesPerGroup = 4; // default
+        // Other/unknown
+        addLogEntry('Other', '-', '-', '', '-', '', raw, 'other');
       }
     }
-    
-    const beamGroups = [];
-    for (let i = 0; i < placed.length; i += notesPerGroup) {
-      const slice = placed.slice(i, i + notesPerGroup);
-      if (slice.length > 1) beamGroups.push(slice);
-    }
-    
-    beamGroups.forEach(group => {
-      const xStart = group[0].stemX;
-      const xEnd = group[group.length - 1].stemX;
-      
-      // Find longest note to determine shared beams across the group
-      // dur values are inverse: dur 8 (eighth) is longer than dur 16 (sixteenth)
-      // Shared beams = beams that span ALL notes (based on longest note = smallest dur value)
-      const longestNoteDur = Math.min(...group.map(n => n.dur || 16));
-      const sharedBeams = longestNoteDur === 4 ? 0 : (longestNoteDur === 8 || longestNoteDur === 12) ? 1 : longestNoteDur === 16 ? 2 : 1;
-      
-      // Draw primary beam(s) connecting the entire group
-      for (let b = 0; b < sharedBeams; b++) {
-        const yOffset = b * (beamThickness + 3);
-        svg.appendChild(makeBeamRect(xStart, xEnd, beamY + yOffset, beamThickness, strokeColor));
-      }
-      
-      // Draw partial beams for consecutive 16th notes in mixed groups
-      if (sharedBeams === 1) {
-        let i = 0;
-        while (i < group.length) {
-          if ((group[i].dur || 16) === 16) {
-            const runStart = i;
-            while (i < group.length && (group[i].dur || 16) === 16) {
-              i++;
-            }
-            const runEnd = i - 1;
-            if (runEnd > runStart) {
-              const partialXStart = group[runStart].stemX;
-              const partialXEnd = group[runEnd].stemX;
-              const yOffset = 1 * (beamThickness + 3);
-              svg.appendChild(makeBeamRect(partialXStart, partialXEnd, beamY + yOffset, beamThickness, strokeColor));
-            }
-          } else {
-            i++;
+
+    async function initializeMIDI() {
+      try {
+        if (!navigator.requestMIDIAccess) {
+          connectionStatus.textContent = 'Web MIDI not supported';
+          connectionStatus.className = 'disconnected';
+          return;
+        }
+
+        const midiAccess = await navigator.requestMIDIAccess({ sysex: true });
+        const inputs = Array.from(midiAccess.inputs.values());
+
+        if (inputs.length === 0) {
+          connectionStatus.textContent = 'No MIDI devices found';
+          connectionStatus.className = 'disconnected';
+          return;
+        }
+
+        // Connect to first input
+        const input = inputs[0];
+        input.onmidimessage = handleMIDIMessage;
+
+        connectionStatus.textContent = 'Connected';
+        connectionStatus.className = 'connected';
+        deviceNameEl.textContent = input.name || 'Unknown Device';
+
+        console.log('MIDI Monitor connected to:', input.name);
+
+        // Listen for device changes
+        midiAccess.onstatechange = (e) => {
+          console.log('MIDI device state changed:', e.port.name, e.port.state);
+          if (e.port.state === 'disconnected' && e.port.id === input.id) {
+            connectionStatus.textContent = 'Disconnected';
+            connectionStatus.className = 'disconnected';
           }
-        }
-      }
-      
-      // Draw triplet "3" marker above the beam
-      if (hasTriplets && group.length >= 2) {
-        const xMid = (xStart + xEnd) / 2;
-        const tripletY = beamY - 12; // above the beam
-        const tripletLabel = makeText(xMid, tripletY, '3', '18px', 'middle', strokeColor);
-        tripletLabel.setAttribute('font-weight', 'bold');
-        svg.appendChild(tripletLabel);
-      }
-    });
-  }
-  
-  return svg;
-}
+        };
 
-// Create or update the notation container
-function renderNotation(patternName) {
-  let container = document.getElementById('notationContainer');
-  if (!container) {
-    const canvas = document.getElementById('patternCanvas');
-    if (!canvas) return;
-    container = document.createElement('div');
-    container.id = 'notationContainer';
-    container.style.cssText = 'margin-top: 10px; background: #1a1a1a; border: 1px solid #333; border-radius: 4px; overflow-x: auto; width: 1180px; box-sizing: content-box;';
-    canvas.parentNode.insertBefore(container, canvas);
-  }
-  
-  // Clear previous
-  while (container.firstChild) container.removeChild(container.firstChild);
-  
-  const svg = renderNotationSVG(patternName, 1180, 170);
-  if (svg) {
-    container.appendChild(svg);
-  }
-}
-
-// ========== END NOTATION RENDERING ==========
-
-// Compute timing errors for each matched note and update error state
-// pattern: array of {time, velocity, sticking} (aligned times)
-// match: array of {time, velocity, sticking} (transformed to align with pattern)
-// latestPatternIdx: the pattern index that the latest match note corresponds to
-function computeTimingErrors(pattern, match, latestPatternIdx) {
-  if (!pattern || !pattern.length || !match || !match.length) return;
-  
-  const hitsPerCycle = window._notationHitsPerCycle || pattern.length;
-  const errorAnchorMap = window._notationErrorAnchorMap || {};
-  
-  // For compound notes (doubles, flams, drags), use the anchored index
-  const anchoredLatestIdx = errorAnchorMap[latestPatternIdx] !== undefined 
-    ? errorAnchorMap[latestPatternIdx] 
-    : latestPatternIdx;
-  const latestNotationIdx = anchoredLatestIdx % hitsPerCycle;
-  
-  // Clear errors for the notation index we're updating (wrap-around clears old errors)
-  window._noteErrors[latestNotationIdx] = [];
-  
-  // Clear dynamics errors for the notation index being updated
-  // (dynamics errors are keyed by originalPatternIdx, so clear any that map to this notation index)
-  if (window._dynamicsErrors) {
-    for (const key of Object.keys(window._dynamicsErrors)) {
-      const idx = parseInt(key);
-      // Clear if this dynamics error's notation index matches
-      if (idx === latestNotationIdx) {
-        delete window._dynamicsErrors[key];
-      }
-    }
-  }
-  
-  // Check if match data has sticking information
-  const matchHasSticking = match.some(m => m.sticking && m.sticking !== '');
-  
-  // Find which pattern note each match note is closest to
-  const patternMatched = new Array(pattern.length).fill(false);
-  const matchAssignments = []; // for each match note: { matchIdx, patternIdx, error, ... }
-  
-  for (let mi = 0; mi < match.length; mi++) {
-    const m = match[mi];
-    let bestPatIdx = -1;
-    let bestDist = Number.MAX_VALUE;
-    
-    for (let pi = 0; pi < pattern.length; pi++) {
-      const dist = Math.abs(pattern[pi].time - m.time);
-      if (dist < bestDist) {
-        bestDist = dist;
-        bestPatIdx = pi;
-      }
-    }
-    
-    if (bestPatIdx >= 0) {
-      const patTime = pattern[bestPatIdx].time;
-      const patSticking = pattern[bestPatIdx].sticking || 'R';
-      const matchTime = m.time;
-      const matchSticking = m.sticking || '';
-      const matchVelocity = m.velocity || 0; // numeric velocity from played note
-      const timingError = matchTime - patTime; // positive = late (dragging), negative = early (rushing)
-      
-      // Check for sticking mismatch (only if match has sticking data)
-      const stickingMismatch = matchHasSticking && matchSticking !== '' && matchSticking !== patSticking;
-      
-      // Use error anchor map to get the correct notation index for compound notes
-      const errorAnchorMap = window._notationErrorAnchorMap || {};
-      const noteInfoMap = window._notationNoteInfoMap || {};
-      const anchoredPatIdx = errorAnchorMap[bestPatIdx] !== undefined ? errorAnchorMap[bestPatIdx] : bestPatIdx;
-      
-      // Get note info for the original hit (not anchored) to know if it's a grace note and dynamics
-      const noteInfo = noteInfoMap[bestPatIdx % hitsPerCycle] || { isGrace: false, graceOffset: 0, isAccent: false, isGhost: false };
-      
-      // Check for dynamics mismatches
-      // Velocity range is 32-127 after scaling, so max=127
-      const velocityThreshold = 127 * DYNAMICS_ACCENT_THRESHOLD; // ~64
-      const missedAccent = noteInfo.isAccent && matchVelocity < velocityThreshold;
-      const missedGhost = noteInfo.isGhost && matchVelocity > velocityThreshold;
-      
-      matchAssignments.push({
-        matchIdx: mi,
-        patternIdx: bestPatIdx,
-        originalPatternIdx: bestPatIdx % hitsPerCycle, // for looking up grace note info
-        notationIdx: anchoredPatIdx % hitsPerCycle, // use anchored index for compound notes
-        timingError,
-        alreadyMatched: patternMatched[bestPatIdx],
-        matchSticking,
-        patternSticking: patSticking,
-        stickingMismatch,
-        isGrace: noteInfo.isGrace,
-        graceOffset: noteInfo.graceOffset,
-        matchVelocity,
-        isAccent: noteInfo.isAccent,
-        isGhost: noteInfo.isGhost,
-        missedAccent,
-        missedGhost
-      });
-      patternMatched[bestPatIdx] = true;
-    }
-  }
-  
-  // Calculate beat duration for proportional offset (use average time between pattern notes)
-  let beatDurationMs = 500; // default
-  if (pattern.length >= 2) {
-    const totalTime = pattern[pattern.length - 1].time - pattern[0].time;
-    beatDurationMs = totalTime / (pattern.length - 1);
-  }
-  
-  // Process assignments to find errors
-  for (const assignment of matchAssignments) {
-    const { notationIdx, originalPatternIdx, timingError, alreadyMatched, matchSticking, patternSticking, stickingMismatch, isGrace, graceOffset, missedAccent, missedGhost } = assignment;
-    
-    // Only update errors for the note we just matched (latestNotationIdx)
-    // This ensures we clear old errors on wrap-around
-    if (notationIdx !== latestNotationIdx) continue;
-    
-    // Determine which sticking to display: user's if available, otherwise pattern's
-    const displaySticking = (matchHasSticking && matchSticking !== '') ? matchSticking : patternSticking;
-    
-    // Check for dynamics errors (missed accent or missed ghost)
-    if (missedAccent) {
-      if (!window._dynamicsErrors) window._dynamicsErrors = {};
-      window._dynamicsErrors[originalPatternIdx] = { type: 'accent' };
-    }
-    if (missedGhost) {
-      if (!window._dynamicsErrors) window._dynamicsErrors = {};
-      window._dynamicsErrors[originalPatternIdx] = { type: 'ghost' };
-    }
-    // Clear dynamics error if played correctly
-    if (!missedAccent && !missedGhost && window._dynamicsErrors) {
-      delete window._dynamicsErrors[originalPatternIdx];
-    }
-    
-    // Check for sticking error (even if timing is good)
-    if (stickingMismatch) {
-      window._noteErrors[notationIdx].push({ 
-        type: 'sticking', 
-        offsetRatio: 0, 
-        sticking: displaySticking,
-        patternSticking,
-        isGrace,
-        graceOffset
-      });
-    }
-    
-    // Check if timing is within dead zone
-    const timingOk = Math.abs(timingError) <= TIMING_DEAD_ZONE_MS;
-    
-    if (!timingOk) {
-      // Calculate offset ratio (how far off as proportion of beat spacing)
-      const offsetRatio = timingError / beatDurationMs;
-      
-      if (timingError < 0) {
-        // Rushing (early)
-        window._noteErrors[notationIdx].push({ 
-          type: 'rush', 
-          offsetRatio, 
-          sticking: displaySticking,
-          patternSticking,
-          isGrace,
-          graceOffset
-        });
-      } else {
-        // Dragging (late)
-        window._noteErrors[notationIdx].push({ 
-          type: 'drag', 
-          offsetRatio, 
-          sticking: displaySticking,
-          patternSticking,
-          isGrace,
-          graceOffset
-        });
-      }
-    }
-    
-    // Extra hit on same beat (double-matched)
-    if (alreadyMatched) {
-      window._noteErrors[notationIdx].push({ 
-        type: 'extra', 
-        offsetRatio: timingError / beatDurationMs, 
-        sticking: displaySticking,
-        patternSticking,
-        isGrace,
-        graceOffset
-      });
-    }
-  }
-  
-  // Check for misses: pattern notes near the latest that weren't matched
-  // Only mark as missed if they're between the first and last matched pattern indices
-  let firstMatched = -1, lastMatched = -1;
-  for (let pi = 0; pi < pattern.length; pi++) {
-    if (patternMatched[pi]) {
-      if (firstMatched < 0) firstMatched = pi;
-      lastMatched = pi;
-    }
-  }
-  
-  if (firstMatched >= 0 && lastMatched > firstMatched) {
-    const noteInfoMap = window._notationNoteInfoMap || {};
-    for (let pi = firstMatched; pi <= lastMatched; pi++) {
-      if (!patternMatched[pi]) {
-        // Use anchored index for compound notes
-        const anchoredPi = errorAnchorMap[pi] !== undefined ? errorAnchorMap[pi] : pi;
-        const notationIdx = anchoredPi % hitsPerCycle;
-        const patSticking = pattern[pi].sticking || 'R';
-        // Get note info for the original hit (not anchored) to know if it's a grace note
-        const noteInfo = noteInfoMap[pi % hitsPerCycle] || { isGrace: false, graceOffset: 0 };
-        // Only update if this is the notation index we just passed
-        // (to avoid clearing valid data or adding stale misses)
-        if (notationIdx === latestNotationIdx || 
-            (notationIdx === (latestNotationIdx - 1 + hitsPerCycle) % hitsPerCycle)) {
-          if (!window._noteErrors[notationIdx]) window._noteErrors[notationIdx] = [];
-          window._noteErrors[notationIdx].push({ 
-            type: 'miss', 
-            offsetRatio: 0, 
-            sticking: patSticking,
-            patternSticking: patSticking,
-            isGrace: noteInfo.isGrace,
-            graceOffset: noteInfo.graceOffset
-          });
-        }
-      }
-    }
-  }
-  
-  // Trigger re-render of error markers
-  renderTimingErrors();
-}
-
-// Render timing error markers on the notation SVG
-function renderTimingErrors() {
-  const svg = document.querySelector('#notationContainer svg');
-  if (!svg) return;
-  
-  const hitMap = window._notationHitMap;
-  if (!hitMap) return;
-  
-  // Remove existing error markers
-  const existing = svg.querySelectorAll('.timing-error');
-  existing.forEach(el => el.remove());
-  
-  // Get notation dimensions from the staff line
-  const staffLine = svg.querySelector('line');
-  if (!staffLine) return;
-  
-  const centerY = parseFloat(staffLine.getAttribute('y1'));
-  const lineThickness = 2;
-  
-  // Note dimensions (matching notation rendering)
-  const headRx = 8;
-  const headRy = 5.5;
-  const graceRx = 5;
-  const graceRy = 3.5;
-  const angleRad = -25 * Math.PI / 180;
-  const minStem = 42;
-  const graceStemLen = 20;
-  const beamY = centerY - 54; // top of beams (matching notation)
-  const anchor = stemAnchor(headRx, headRy, angleRad);
-  const graceAnchor = stemAnchor(graceRx, graceRy, angleRad);
-  
-  // Get slot width from notation (distance between adjacent notes)
-  const hitPositions = Object.values(hitMap).filter(x => x !== null).sort((a, b) => a - b);
-  let slotWidth = 50; // default
-  if (hitPositions.length >= 2) {
-    let minSpacing = Number.MAX_VALUE;
-    for (let i = 1; i < hitPositions.length; i++) {
-      const spacing = hitPositions[i] - hitPositions[i - 1];
-      if (spacing > 0 && spacing < minSpacing) minSpacing = spacing;
-    }
-    if (minSpacing < Number.MAX_VALUE) slotWidth = minSpacing;
-  }
-  
-  // All errors are red (including misses)
-  const errorColor = 'rgba(255, 80, 80, 0.9)';
-  
-  // Draw error markers
-  for (const [notationIdxStr, errors] of Object.entries(window._noteErrors)) {
-    const notationIdx = parseInt(notationIdxStr);
-    const baseX = hitMap[notationIdx];
-    if (baseX === null || baseX === undefined) continue;
-    
-    for (const error of errors) {
-      const sticking = error.sticking || 'R';
-      const offsetX = (error.offsetRatio || 0) * slotWidth;
-      const isGrace = error.isGrace || false;
-      const graceOffset = error.graceOffset || 0;
-      const isMiss = error.type === 'miss';
-      const isStickingError = error.type === 'sticking';
-      
-      // Use appropriate dimensions for grace vs main notes
-      const rx = isGrace ? graceRx : headRx;
-      const ry = isGrace ? graceRy : headRy;
-      const anch = isGrace ? graceAnchor : anchor;
-      
-      // Apply grace offset to x position
-      const x = baseX + offsetX + graceOffset;
-      
-      // Y position based on sticking: R below line, L above line
-      const y = sticking === 'R' 
-        ? centerY + ry + lineThickness / 2 + 2
-        : centerY - ry - lineThickness / 2 - 2;
-      
-      // Create a group for the error note
-      const g = createSvgElement('g');
-      g.setAttribute('class', 'timing-error');
-      
-      // Draw notehead (hollow for misses, filled for other errors)
-      const head = createSvgElement('ellipse');
-      head.setAttribute('cx', x);
-      head.setAttribute('cy', y);
-      head.setAttribute('rx', rx);
-      head.setAttribute('ry', ry);
-      if (isMiss) {
-        // Hollow notehead for misses
-        head.setAttribute('fill', 'none');
-        head.setAttribute('stroke', errorColor);
-        head.setAttribute('stroke-width', '2');
-      } else {
-        // Filled notehead for other errors
-        head.setAttribute('fill', errorColor);
-      }
-      head.setAttribute('transform', `rotate(${angleRad * 180 / Math.PI} ${x} ${y})`);
-      g.appendChild(head);
-      
-      // Draw stem (skip for sticking errors - just show notehead on wrong side)
-      if (!isStickingError) {
-        const stemX = x + anch.offsetX * 0.9;
-        const stemStartY = y + anch.offsetY;
-        const stemLen = isGrace ? graceStemLen : Math.max(minStem, stemStartY - beamY + 1);
-        const stem = createSvgElement('line');
-        stem.setAttribute('x1', stemX);
-        stem.setAttribute('y1', stemStartY);
-        stem.setAttribute('x2', stemX);
-        stem.setAttribute('y2', stemStartY - stemLen);
-        stem.setAttribute('stroke', errorColor);
-        stem.setAttribute('stroke-width', '2');
-        stem.setAttribute('stroke-linecap', 'round');
-        g.appendChild(stem);
-        
-        // Draw flag on grace note errors (like flam grace notes)
-        if (isGrace) {
-          // Simple flag shape
-          const flagStartY = stemStartY - stemLen;
-          const flag = createSvgElement('path');
-          const flagPath = `M ${stemX} ${flagStartY} q 6 8, 4 16`;
-          flag.setAttribute('d', flagPath);
-          flag.setAttribute('fill', 'none');
-          flag.setAttribute('stroke', errorColor);
-          flag.setAttribute('stroke-width', '2');
-          flag.setAttribute('stroke-linecap', 'round');
-          g.appendChild(flag);
-        }
-      }
-      
-      svg.appendChild(g);
-    }
-  }
-  
-  // Render dynamics errors (missed accents and ghost notes)
-  const dynamicsErrors = window._dynamicsErrors || {};
-  const noteInfoMap = window._notationNoteInfoMap || {};
-  const accentOffset = 16;
-  
-  for (const [patternIdxStr, error] of Object.entries(dynamicsErrors)) {
-    const patternIdx = parseInt(patternIdxStr);
-    const noteInfo = noteInfoMap[patternIdx];
-    if (!noteInfo) continue;
-    
-    const { x, y, sticking, isAccent, isGhost } = noteInfo;
-    const ry = headRy; // use main note size for positioning
-    
-    // Create group for dynamics error
-    const g = createSvgElement('g');
-    g.setAttribute('class', 'timing-error dynamics-error');
-    
-    if (error.type === 'accent' && isAccent) {
-      // Draw red accent mark over the note
-      // Position above the stem end (matching notation rendering)
-      const stemStartY = sticking === 'R' 
-        ? centerY + ry + lineThickness / 2 + 2 + anchor.offsetY
-        : centerY - ry - lineThickness / 2 - 2 + anchor.offsetY;
-      const stemLen = Math.max(minStem, stemStartY - beamY + 1);
-      const accentY = stemStartY - stemLen - accentOffset;
-      
-      // Draw accent mark (matching makeAccentMark style - open ">" shape)
-      const accent = createSvgElement('path');
-      const w = 7;  // half-width
-      const h = 6;  // half-height
-      accent.setAttribute('d', `M ${x - w} ${accentY - h} L ${x + w} ${accentY} L ${x - w} ${accentY + h}`);
-      accent.setAttribute('stroke', errorColor);
-      accent.setAttribute('stroke-width', '2.5');
-      accent.setAttribute('fill', 'none');
-      accent.setAttribute('stroke-linecap', 'round');
-      accent.setAttribute('stroke-linejoin', 'round');
-      g.appendChild(accent);
-    }
-    
-    if (error.type === 'ghost' && isGhost) {
-      // Draw red parentheses around the note
-      const offset = 14;
-      const height = ry * 2.2;
-      
-      // Left paren
-      const leftParen = createSvgElement('path');
-      leftParen.setAttribute('d', `M ${x - offset + 4} ${y - height / 2} Q ${x - offset - 2} ${y}, ${x - offset + 4} ${y + height / 2}`);
-      leftParen.setAttribute('stroke', errorColor);
-      leftParen.setAttribute('stroke-width', '2');
-      leftParen.setAttribute('fill', 'none');
-      leftParen.setAttribute('stroke-linecap', 'round');
-      g.appendChild(leftParen);
-      
-      // Right paren
-      const rightParen = createSvgElement('path');
-      rightParen.setAttribute('d', `M ${x + offset - 4} ${y - height / 2} Q ${x + offset + 2} ${y}, ${x + offset - 4} ${y + height / 2}`);
-      rightParen.setAttribute('stroke', errorColor);
-      rightParen.setAttribute('stroke-width', '2');
-      rightParen.setAttribute('fill', 'none');
-      rightParen.setAttribute('stroke-linecap', 'round');
-      g.appendChild(rightParen);
-    }
-    
-    if (g.childNodes.length > 0) {
-      svg.appendChild(g);
-    }
-  }
-}
-
-// Move notation cursor to the given pattern hit index
-// Uses modulo to wrap around if pattern repeats more than notation
-function highlightNotationHit(patternHitIdx) {
-  const hitMap = window._notationHitMap;
-  const hitsPerCycle = window._notationHitsPerCycle;
-  
-  if (!hitMap || !hitsPerCycle || patternHitIdx < 0) return;
-  
-  // Wrap around using modulo for patterns that repeat
-  const notationHitIdx = patternHitIdx % hitsPerCycle;
-  
-  // Get x position for this hit (null means skip, e.g. second hit of double)
-  const xPos = hitMap[notationHitIdx];
-  if (xPos === null || xPos === undefined) return;
-  
-  // Find and move the cursor
-  const cursor = document.getElementById('notationCursor');
-  if (!cursor) return;
-  
-  cursor.setAttribute('x', xPos - 20); // center the 40px wide cursor
-  cursor.style.display = 'block';
-}
-
-// Hide the notation cursor
-function clearNotationHighlights() {
-  const cursor = document.getElementById('notationCursor');
-  if (cursor) {
-    cursor.style.display = 'none';
-  }
-}
-
-// Render a pattern (background) and a match (overlay) on the canvas.
-// pattern: array of {time, velocity, ...}
-// match: array of {time, velocity, ...}
-// scale: multiplicative time scale applied to match
-// translate: time offset (ms) applied to match after scaling
-function renderPatternMatch(pattern, match, scale, translate) {
-  const canvas = document.getElementById('patternCanvas');
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  const W = canvas.width;
-  const H = canvas.height;
-  const barWidth = 6;
-  const halfBar = barWidth / 2;
-  ctx.clearRect(0, 0, W, H);
-
-  if (!pattern || !pattern.length) return;
-  
-  console.log('renderPatternMatch: ' + pattern.length + ' pattern notes, ' + (match ? match.length : 0) + ' match notes');
-
-  const padding = 5;
-  // Render the full extended pattern
-  let renderPattern = pattern;
-
-  const patTimes = renderPattern.map((p) => Number(p.time));
-  const matchTimes = (match || []).map((m) => Number(m.time));
-  const allTimes = patTimes.concat(matchTimes.length ? matchTimes : [patTimes[0], patTimes[patTimes.length - 1]]);
-  let minTime = Math.min.apply(null, allTimes);
-  let maxTime = Math.max.apply(null, allTimes);
-  const timeRange = Math.max(1, maxTime - minTime);
-
-  const leftPad = padding + halfBar;
-  const rightPad = padding + halfBar;
-  const usableWidth = Math.max(1, W - leftPad - rightPad);
-  const mapX = (t) => leftPad + ((t - minTime) / timeRange) * usableWidth;
-
-  // Layout vertically into two bands (pattern top, match bottom), reserving space for metric bars.
-  const metricsAreaHeight = 120; // space for dynamics/timing/sticking/feel bars
-  const available = H - padding * 2 - metricsAreaHeight;
-  const bandHeight = available / 2;
-  const patternBaseline = padding + bandHeight - 2; // bottom of top band
-  // Reserve a small label area under the match band so labels can be drawn
-  // below the match bars without overlapping the canvas edge.
-  const labelHeight = 12; // px (approx for 11px font)
-  const labelMargin = 2; // px gap between bar and label
-  const matchBaseline = padding + available - labelHeight; // lifted so labels fit below
-
-  // velocity -> bar height using fixed MIDI scale (0..127), not relative to observed max
-  const velToHeight = (v) => {
-    const norm = Math.max(0, Math.min(127, toNumericVelocity(v))) / 127;
-    return norm * (bandHeight * 0.7); // smaller bars to fit in reduced height
-  };
-
-  // Draw pattern bars (background) on the top band
-  ctx.textAlign = 'center';
-  ctx.font = '11px sans-serif';
-  const highlightIdx = (typeof window._lastMatchedPatternIdx === 'number') ? window._lastMatchedPatternIdx : -1;
-  // Render all sticking labels across the extended pattern
-  for (let i = 0; i < renderPattern.length; i++) {
-    const p = renderPattern[i];
-    const x = mapX(p.time);
-    const h = velToHeight(p.velocity);
-    // gray bar for pattern (ensure it stays in the top band)
-    ctx.fillStyle = (i === highlightIdx) ? '#ff4d4d' : '#aaaaaa';
-    ctx.fillRect(x - halfBar, patternBaseline - h, barWidth, h);
-    // sticking label aligned to the top of the top band
-    if (p.sticking) {
-      ctx.fillStyle = '#e0e0e0';
-      ctx.textBaseline = 'top';
-      const labelY = padding + 2;
-      ctx.fillText(String(p.sticking), x, labelY);
-    }
-  }
-
-  // Draw match (already scaled + translated by search) on the bottom band
-  if (match && match.length) {
-    for (let i = 0; i < match.length; i++) {
-      const m = match[i];
-      const x = mapX(m.time);
-      const h = velToHeight(m.velocity);
-      // blue bar for match (ensure it stays in the bottom band)
-      ctx.fillStyle = 'rgba(30,144,255,0.85)'; // dodgerblue
-      ctx.fillRect(x - halfBar, matchBaseline - h, barWidth, h);
-      // sticking label for match (draw all labels)
-      if (m.sticking) {
-        // Draw the sticking label in blue and below the match bar.
-        ctx.fillStyle = '#1e90ff'; // dodgerblue
-        ctx.textBaseline = 'top';
-        const labelY = matchBaseline + 6; // a small offset below the bar bottom
-        ctx.fillText(String(m.sticking), x, labelY);
+      } catch (error) {
+        connectionStatus.textContent = 'MIDI access denied';
+        connectionStatus.className = 'disconnected';
+        console.error('MIDI error:', error);
       }
     }
 
-    // Draw a faint line connecting match and pattern center to indicate offset/scale
-    ctx.strokeStyle = 'rgba(0,0,0,0.1)';
-    ctx.beginPath();
-    ctx.moveTo(leftPad, H / 2);
-    ctx.lineTo(W - rightPad, H / 2);
-    ctx.stroke();
-  }
-
-  // Draw performance bars (dynamics/timing) in the bottom area
-  const metrics = window._lastMetrics || null;
-  const barLeft = padding;
-  const barRight = W - padding;
-  const metricsWidth = Math.max(1, barRight - barLeft);
-  const barHeight = 16;
-  const barGap = 10;
-  const barTop = padding + available + 15; // below the two bands
-  const textPad = 90;
-  const barStart = barLeft + textPad;
-  const barW = Math.max(1, metricsWidth - textPad);
-
-  function drawMetricBar(label, value, minValue, maxValue, y) {
-    const v = (typeof value === 'number' && isFinite(value)) ? value : maxValue;
-    const clamped = Math.max(minValue, Math.min(maxValue, v));
-    const linear = Math.max(0, Math.min(1, (maxValue - clamped) / (maxValue - minValue)));
-    const norm = Math.pow(linear, 0.5);
-    ctx.fillStyle = '#ddd';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.font = '14px sans-serif';
-    ctx.fillText(label, barLeft, y + barHeight / 2);
-    ctx.strokeStyle = '#555';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(barStart, y, barW, barHeight);
-    ctx.fillStyle = 'rgba(80, 200, 120, 0.85)';
-    ctx.fillRect(barStart, y, barW * norm, barHeight);
-  }
-
-  const DYNAMICS_BAR_MIN = 5;
-  const DYNAMICS_BAR_MAX = 20;
-  const TIMING_BAR_MIN = 5;
-  const TIMING_BAR_MAX = 20;
-  const STICKING_BAR_MIN = 0;
-  const STICKING_BAR_MAX = 5;
-  drawMetricBar('Dynamics', metrics ? metrics.dynamics : null, DYNAMICS_BAR_MIN, DYNAMICS_BAR_MAX, barTop);
-  drawMetricBar('Timing', metrics ? metrics.timing : null, TIMING_BAR_MIN, TIMING_BAR_MAX, barTop + barHeight + barGap);
-  drawMetricBar('Sticking', metrics ? metrics.stickingCount : null, STICKING_BAR_MIN, STICKING_BAR_MAX, barTop + (barHeight + barGap) * 2);
-
-  if (metrics && typeof metrics.scale === 'number') {
-    const scale = metrics.scale;
-    let label = 'On time';
-    if (scale > 1.03) label = 'Rushing';
-    else if (scale < 0.97) label = 'Dragging';
-    const bpm = (window._bpmTarget || 0) * scale;
-    const y = barTop + (barHeight + barGap) * 3;
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.font = '14px sans-serif';
-    ctx.fillStyle = '#ddd';
-    ctx.fillText('Feel', barLeft, y + barHeight / 2);
-    ctx.fillStyle = '#4fd97b';
-    ctx.font = 'bold 14px sans-serif';
-    const bpmText = isFinite(bpm) && bpm > 0 ? ('  ' + bpm.toFixed(1) + ' BPM') : '';
-    ctx.fillText(label + bpmText, barStart, y + barHeight / 2);
-  }
-
-  // (legend removed to keep the canvas area clean)
-}
-
-// Keep last render parameters (used to re-render after search without re-running it)
-window._lastRender = null;
-// Track last matched pattern index for progress heuristic
-window._lastMatchedPatternIdx = null;
-// Map from pattern hit index to x-position for cursor
-// hitMap[hitIdx] = x position (or null to skip, e.g. second hit of double)
-window._notationHitMap = [];
-window._notationHitsPerCycle = 0;
-
-function search(pattern, match, velocityWeight, stickingWeight, opts = {}) {
-  const { render = true, patternName = null } = opts;
-  if (!match || !match.length) return;
-  const trimmed = trimMatchAfterLargeGap(match);
-  if (!trimmed || !trimmed.length) return;
-
-  // Use raw match velocities; only convert pattern velocities to numeric
-  const pat = pattern.map((p) => ({ time: p.time, velocity: toNumericVelocity(p.velocity), sticking: p.sticking }));
-  const workMatch = trimmed;
-  const t0 = performance.now();
-
-  const candidates = [];
-  const denomEps = 1e-6;
-  const topN = TOP_CANDIDATES;
-
-  function mapLatestMatchToPattern(transformedMatch, patArr) {
-    if (!transformedMatch.length) return -1;
-    const last = transformedMatch[transformedMatch.length - 1];
-    let bestIdx = -1;
-    let bestDist = Number.MAX_VALUE;
-    for (let i = 0; i < patArr.length; i++) {
-      const dist = Math.abs(patArr[i].time - last.time);
-      if (dist < bestDist) {
-        bestDist = dist;
-        bestIdx = i;
-      }
-    }
-    return bestIdx;
-  }
-
-  for (let pi = 0; pi < pat.length; pi++) {
-    const p0 = pat[pi];
-    const p1 = pat[pi + 1];
-    if (!p1) continue; // require a next beat
-    for (let mi = 0; mi < workMatch.length; mi++) {
-      const m0 = workMatch[mi];
-      for (let skip = 1; skip <= 3; skip++) {
-        const m1 = workMatch[mi + skip];
-        if (!m1) continue; // require a next beat (possibly skipping flams/drags)
-
-        const denom = (m1.time - m0.time);
-        if (Math.abs(denom) < denomEps) continue;
-
-        const scale = (p1.time - p0.time) / denom;
-        if (!isFinite(scale) || scale <= 0) continue;
-
-        const translate = p0.time - m0.time * scale;
-        if (translate < 0) continue; // do not explore negative translations
-        const scaledTimeMatch = scaleTime(workMatch, scale);
-        const mv0 = Number(m0.velocity || 0);
-        const pv0 = Number(p0.velocity || 0);
-        const vscale = mv0 > 0 ? (pv0 / mv0) : 1;
-        if (!isFinite(vscale) || vscale <= 0) continue;
-        const timeTranslated = translateTime(scaledTimeMatch, translate);
-        const scaledVelMatch = scaleVelocity(timeTranslated, vscale);
-        const sc = score(pat, scaledVelMatch, velocityWeight, stickingWeight);
-        if (Number.isFinite(sc.dynamics) && Number.isFinite(sc.timing) && sc.dynamics !== Number.MAX_VALUE && sc.timing !== Number.MAX_VALUE) {
-          const combined = Math.sqrt(sc.dynamics * sc.dynamics + sc.timing * sc.timing);
-          let finalScore = combined;
-          const latestIdx = mapLatestMatchToPattern(timeTranslated, pat);
-          if (window._lastMatchedPatternIdx !== null && latestIdx >= 0) {
-            const expected = window._lastMatchedPatternIdx + 1;
-            let diff = latestIdx - expected;
-            
-            // Handle wrapping: use the visual cycle length for wrap detection
-            // Multiple cycle boundaries exist in the extended pattern
-            const cycleLen = window._notationHitsPerCycle || pat.length;
-            const lastPosInCycle = window._lastMatchedPatternIdx % cycleLen;
-            const latestPosInCycle = latestIdx % cycleLen;
-            
-            // If we're near end of a cycle and latestIdx is near start of any cycle,
-            // treat as forward progress (wrapping)
-            if (lastPosInCycle >= cycleLen - 3 && latestPosInCycle < cycleLen / 4) {
-              // Wrapping within visual cycle - recalculate as forward progress
-              diff = latestPosInCycle + (cycleLen - lastPosInCycle - 1);
-              if (diff < 0) diff = 0; // ensure non-negative
-            }
-            
-            if (window._patternLocked) {
-              // When locked, enforce forward progress
-              if (diff < -LOCKED_JITTER_TOLERANCE) {
-                // Going backward beyond jitter tolerance - skip entirely
-                continue;
-              } else if (diff < 0) {
-                // Going backward within tolerance - heavy penalty to discourage
-                finalScore += Math.abs(diff) * 200;
-              } else if (diff === 0) {
-                // Exactly expected - small bonus
-                finalScore -= 5;
-              } else if (diff <= LOCKED_JITTER_TOLERANCE) {
-                // Small forward jump (1-2 notes) - slight penalty
-                finalScore += diff * 10;
-              } else {
-                // Large forward jump - bigger penalty
-                finalScore += (diff - LOCKED_JITTER_TOLERANCE) * LOCKED_JUMP_PENALTY_PER_NOTE + LOCKED_JITTER_TOLERANCE * 10;
-              }
-            } else {
-              // Not locked - use lighter penalty
-              if (latestIdx !== expected) {
-                finalScore += PROGRESS_PENALTY;
-              }
-            }
-          }
-          candidates.push({ score: finalScore, dynamics: sc.dynamics, timing: sc.timing, reuseCount: sc.reuseCount, gapCount: sc.gapCount, stickingCount: sc.stickingCount, latestIdx, scale, translate, vscale, match: scaledVelMatch });
-        }
-      }
-    }
-  }
-
-  if (!candidates.length) {
-    if (render) {
-      console.log('search: no candidates, took ' + (performance.now() - t0).toFixed(2) + ' ms');
-      const dbg = document.getElementById('debug');
-      if (dbg) dbg.textContent = 'No candidates (search ' + (performance.now() - t0).toFixed(2) + ' ms)';
-    }
-    return null;
-  }
-
-  candidates.sort((a, b) => a.score - b.score);
-  const top = candidates.slice(0, topN);
-
-  // Store for later refinement
-  window._lastCandidates = top;
-
-  const best = top[0];
-  window._lastMetrics = { dynamics: best.dynamics, timing: best.timing, stickingCount: best.stickingCount, scale: best.scale };
-  
-  // Compute BPM from scale: actual BPM = target BPM * scale
-  // Scale > 1 means user plays faster than pattern, scale < 1 means slower
-  if (typeof best.scale === 'number' && isFinite(best.scale) && best.scale > 0) {
-    window._currentBPM = (window._bpmTarget || 120) * best.scale;
-    updateLockIndicator(); // refresh BPM display
-  }
-  
-  // Track recent scores for bad-match detection when locked
-  if (window._patternLocked && render) {
-    window._recentScores.push(best.score);
-    if (window._recentScores.length > STICKY_SCORE_WINDOW_SIZE) {
-      window._recentScores.shift();
-    }
-    // Check if average score is bad enough to unlock
-    if (window._recentScores.length >= STICKY_SCORE_WINDOW_SIZE) {
-      const avgScore = window._recentScores.reduce((a, b) => a + b, 0) / window._recentScores.length;
-      if (avgScore > STICKY_BAD_SCORE_THRESHOLD) {
-        unlockPattern('bad score average (' + avgScore.toFixed(2) + ' > ' + STICKY_BAD_SCORE_THRESHOLD + ')');
-      }
-    }
-  }
-  
-  best.patternName = patternName;
-  if (!render) {
-    return best;
-  }
-  try {
-    console.log('Best match found: scale=' + best.scale + ', translate=' + best.translate + (best.vscale ? (', vscale=' + best.vscale) : '') + '; search took ' + (performance.now() - t0).toFixed(2) + ' ms' + (patternName ? (' | pattern=' + patternName) : ''));
-    console.log('  Component scores -> dynamics: ' + best.dynamics.toFixed(2) + ', timing: ' + best.timing.toFixed(2));
-    console.log('  Counts -> extra beats: ' + (best.reuseCount || 0) + ', missed beats: ' + (best.gapCount || 0) + ', sticking: ' + (best.stickingCount || 0));
-    console.log('  Transformed match times: ' + best.match.map((m) => m.time.toFixed(0)).join(', '));
-    window._lastRender = { pat: pat, match: best.match, scale: best.scale, translate: best.translate, vscale: best.vscale };
-    if (best.latestIdx !== undefined && best.latestIdx >= 0) {
-      window._lastMatchedPatternIdx = best.latestIdx;
-      // Highlight the corresponding notation element
-      highlightNotationHit(best.latestIdx);
-      // Compute and render timing errors
-      computeTimingErrors(pat, best.match, best.latestIdx);
-    }
-    renderPatternMatch(pat, best.match, 1.0, 0);
-    const dbg = document.getElementById('debug');
-    if (dbg) {
-      dbg.textContent = 'Dynamics: ' + best.dynamics.toFixed(2) + ' | Timing: ' + best.timing.toFixed(2) + ' | Combined: ' + best.score.toFixed(2) + ' | Extra: ' + (best.reuseCount || 0) + ' | Missed: ' + (best.gapCount || 0) + ' | Sticking: ' + (best.stickingCount || 0) + ' | Scale: ' + best.scale.toFixed(3) + ' | Translate: ' + best.translate.toFixed(1) + (best.vscale ? (' | Vscale: ' + best.vscale.toFixed(3)) : '');
-    }
-  } catch (e) {
-    console.log('Rendering failed: ' + (e && e.message ? e.message : String(e)));
-  }
-  return best;
-}
-
-// Search all patterns in the library and auto-select the best-scoring pattern.
-function searchAcrossPatterns(match, velocityWeight, stickingWeight) {
-  if (!match || !match.length) return;
-  
-  const currentName = window._currentPatternName || null;
-  
-  // If pattern is locked, only search the current pattern
-  if (window._patternLocked && currentName && PATTERN_LIBRARY[currentName]) {
-    console.log('Pattern locked to "' + currentName + '" - skipping global search');
-    search(PATTERN_LIBRARY[currentName], match, velocityWeight, stickingWeight, { render: true, patternName: currentName });
-    return;
-  }
-  
-  // Global search across all patterns
-  let bestOverall = null;
-  let bestPatternName = null;
-  let bestOverallScore = Number.MAX_VALUE;
-
-  for (const [name, pat] of Object.entries(PATTERN_LIBRARY)) {
-    const result = search(pat, match, velocityWeight, stickingWeight, { render: false, patternName: name });
-    if (!result) continue;
-    if (result.score < bestOverallScore) {
-      bestOverallScore = result.score;
-      bestOverall = result;
-      bestPatternName = name;
-    }
-  }
-
-  if (!bestOverall || !bestPatternName) return;
-
-  // Switch to the winning pattern - preserve progress if staying on same pattern
-  const samePattern = bestPatternName === currentName;
-  setPattern(bestPatternName, true, samePattern);
-
-  // Check if we should lock onto this pattern
-  const shouldLock = match.length >= STICKY_MIN_NOTES && bestOverall.score <= STICKY_SCORE_THRESHOLD;
-  if (shouldLock && !window._patternLocked) {
-    window._patternLocked = true;
-    window._recentScores = []; // Clear score history on lock
-    updateLockIndicator();
-    console.log('Pattern LOCKED to "' + bestPatternName + '" (score: ' + bestOverall.score.toFixed(2) + ', notes: ' + match.length + ')');
-  } else if (!window._patternLocked) {
-    console.log('Pattern not yet locked (score: ' + bestOverall.score.toFixed(2) + ', notes: ' + match.length + ', need score <= ' + STICKY_SCORE_THRESHOLD + ' and notes >= ' + STICKY_MIN_NOTES + ')');
-  }
-
-  // Render and log using the winning pattern; re-run search for side effects/state updates
-  search(PATTERN_LIBRARY[bestPatternName], match, velocityWeight, stickingWeight, { render: true, patternName: bestPatternName });
-}
-
-populatePatternMenu();
-setPattern(DEFAULT_PATTERN_KEY);
-setupStickMappingUI();
-setupTempoControls();
-updateLockIndicator(); // Show initial unlocked state
-searchAcrossPatterns(diddle4, 1, 1);
-startMIDI();
-/*
-window.setTimeout(() =>
-{
-  // alert("diddle0");
-  search(window._extendedPattern, diddle0, 1, 1);
-  window.setTimeout(() =>
-  {
-    //alert("diddle1");
-    search(window._extendedPattern, diddle1, 1, 1);
-    window.setTimeout(() =>
-    {
-      //alert("diddle2");
-      search(window._extendedPattern, diddle2, 1, 1);
-      window.setTimeout(() =>
-      {
-        //alert("diddle3");
-        search(window._extendedPattern, diddle3, 1, 1);
-        window.setTimeout(() =>
-        {
-          //alert("diddle4");
-          search(window._extendedPattern, diddle4, 1, 1);
-          window.setTimeout(startMIDI, TEST_TIMEOUT);
-        }, TEST_TIMEOUT);
-      }, TEST_TIMEOUT);
-    }, TEST_TIMEOUT);
-  }, TEST_TIMEOUT);
-}, TEST_TIMEOUT);
-// */
-        </script>
-    </body>
+    // Start immediately
+    initializeMIDI();
+  </script>
+</body>
 </html>

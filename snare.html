@@ -34,6 +34,33 @@
       
       // Last completed batch for display
       let lastBatch = null;
+      
+      // MIDI log with burst timeout
+      let midiLog = [];
+      let lastMessageTime = 0;
+      const BURST_TIMEOUT_MS = 1000;
+      const MAX_LOG_ENTRIES = 8;
+      
+      // Drum note lookup
+      const drumMap = {
+        38: 'Snare Head',
+        40: 'Snare Rim',
+        23: 'Snare Brush',
+        37: 'Snare XStick',
+        19: 'Snare Head (wires off)',
+        18: 'Snare Rim (wires off)',
+        16: 'Snare Brush (wires off)',
+        17: 'Snare XStick (wires off)',
+        20: 'Wires Off',
+        21: 'Wires On',
+      };
+      
+      // CC name lookup
+      const ccMap = {
+        16: 'Radius',
+        80: 'Angle',
+        88: 'Fine Vel',
+      };
 
       function resizeCanvas() {
         canvas.width = window.innerWidth;
@@ -96,77 +123,66 @@
           ctx.stroke();
         }
         
-        // Draw MIDI batch display on the left side
-        drawMidiBatch();
+        // Draw MIDI log on the left side
+        drawMidiLog();
       }
       
-      function drawMidiBatch() {
-        if (!lastBatch) return;
+      function addToMidiLog(type, note, value, cssColor) {
+        const now = performance.now();
         
-        const fontSize = 24;
-        const lineHeight = 32;
+        // Clear log if burst timeout exceeded
+        if (lastMessageTime > 0 && (now - lastMessageTime) > BURST_TIMEOUT_MS) {
+          midiLog = [];
+        }
+        lastMessageTime = now;
+        
+        midiLog.push({ type, note, value, color: cssColor });
+        
+        // Keep only recent entries
+        if (midiLog.length > MAX_LOG_ENTRIES) {
+          midiLog.shift();
+        }
+        
+        drawSnare();
+      }
+      
+      function drawMidiLog() {
+        if (midiLog.length === 0) return;
+        
+        const fontSize = 18;
+        const lineHeight = 24;
         const padding = 20;
         const leftX = padding;
         let y = center.y - maxRadius;
         
-        ctx.font = `bold ${fontSize}px monospace`;
+        ctx.font = `${fontSize}px monospace`;
         ctx.textAlign = 'left';
         ctx.textBaseline = 'top';
         
-        // Title
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-        ctx.fillText('Last MIDI Batch', leftX, y);
-        y += lineHeight + 8;
-        
-        // Note On
-        if (lastBatch.noteOn) {
-          const { note, velocity, channel } = lastBatch.noteOn;
-          ctx.fillStyle = 'rgba(100, 255, 100, 0.9)';
-          ctx.fillText(`Note On`, leftX, y);
-          ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-          ctx.fillText(`        ch${channel} note=${note} vel=${velocity}`, leftX, y);
+        for (const entry of midiLog) {
+          const drumName = drumMap[entry.note] || '';
+          const typeStr = entry.type.padEnd(8);
+          const noteStr = entry.note !== null ? String(entry.note).padStart(3) : '   ';
+          const valStr = entry.value !== null ? String(entry.value).padStart(3) : '   ';
+          
+          ctx.fillStyle = entry.color;
+          ctx.fillText(typeStr, leftX, y);
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+          ctx.fillText(`${noteStr} ${valStr}`, leftX + 90, y);
+          ctx.fillStyle = 'rgba(170, 170, 170, 0.7)';
+          ctx.fillText(drumName, leftX + 170, y);
           y += lineHeight;
         }
         
-        // CCs
-        for (const cc of lastBatch.ccs) {
-          const { controller, value, channel } = cc;
-          const ccName = getCcName(controller);
-          ctx.fillStyle = 'rgba(100, 170, 255, 0.9)';
-          ctx.fillText(`CC ${controller.toString().padStart(2)}`, leftX, y);
-          ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-          ctx.fillText(`       ch${channel} ${ccName} = ${value}`, leftX, y);
-          y += lineHeight;
-        }
-        
-        // Note Off
-        if (lastBatch.noteOff) {
-          const { note, velocity, channel } = lastBatch.noteOff;
-          ctx.fillStyle = 'rgba(255, 100, 100, 0.9)';
-          ctx.fillText(`Note Off`, leftX, y);
-          ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-          ctx.fillText(`         ch${channel} note=${note} vel=${velocity}`, leftX, y);
-          y += lineHeight;
-        }
-        
-        // Computed values
-        y += 8;
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-        ctx.fillText('Computed', leftX, y);
-        y += lineHeight;
-        ctx.fillStyle = 'rgba(255, 200, 100, 0.9)';
-        ctx.fillText(`Velocity 14-bit: ${state.velocity14}`, leftX, y);
-        y += lineHeight;
-        ctx.fillText(`Angle: ${state.angleCc}  Radius: ${state.radiusCc}`, leftX, y);
+        // Computed values below
+        y += 12;
+        ctx.fillStyle = 'rgba(255, 200, 100, 0.8)';
+        ctx.font = `${fontSize - 2}px monospace`;
+        ctx.fillText(`Vel14: ${state.velocity14}  Angle: ${state.angleCc}  Radius: ${state.radiusCc}`, leftX, y);
       }
       
       function getCcName(cc) {
-        switch (cc) {
-          case 16: return 'radius';
-          case 80: return 'angle';
-          case 88: return 'vel LSB';
-          default: return '';
-        }
+        return ccMap[cc] || `CC${cc}`;
       }
 
       function updateHitFromCc() {
@@ -254,6 +270,8 @@
               state.velocityMsb = data2;
               state.velocity14 = (state.velocityMsb << 7) | (state.velocityLsb & 0x7f);
               updateHitFromCc();
+              
+              addToMidiLog('Note On', data1, data2, 'rgba(100, 255, 100, 0.9)');
             } else if (cmd === 0x90 && data2 === 0 || cmd === 0x80) {
               // Note Off - complete the batch
               console.log(`NOTE noteoff ch=${channel + 1} note=${data1} vel=${data2}`);
@@ -266,7 +284,8 @@
                 ccs: [...midiBatch.ccs],
                 noteOff: midiBatch.noteOff
               };
-              drawSnare();
+              
+              addToMidiLog('Note Off', data1, data2, 'rgba(255, 100, 100, 0.9)');
             } else if (cmd === 0xb0) {
               // CC message
               console.log(`CC ch${channel + 1}: ${data1} -> ${data2}`);
@@ -278,6 +297,8 @@
               if (midiBatch.collecting) {
                 midiBatch.ccs.push({ controller: data1, value: data2, channel: channel + 1 });
               }
+              
+              addToMidiLog(getCcName(data1), data1, data2, 'rgba(100, 170, 255, 0.9)');
             } else {
               console.log(`MIDI cmd=0x${cmd.toString(16)} ch=${channel + 1} raw=[${Array.from(data).join(',')}]`);
             }
