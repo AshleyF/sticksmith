@@ -21,7 +21,9 @@
   <div id="notationContainer" style="margin-top: 10px; background: #1a1a1a; border: 1px solid #333; border-radius: 4px; overflow-x: auto; max-width: 1180px; box-sizing: content-box;"></div>
   <a href="#" id="debugToggle" onclick="toggleDebugSection(); return false;">▶ Show controls</a>
   <div id="debugSection" style="display: none;">
-    <label for="patternSelect">Pattern: </label>
+    <label for="groupSelect">Group: </label>
+    <select id="groupSelect"></select>
+    <label for="patternSelect" style="margin-left:12px;">Pattern: </label>
     <select id="patternSelect"></select>
     <div style="margin-top:6px; font-size:12px;">
       <a href="snare.html" style="color:#9ad;">Open Snare Monitor</a>
@@ -57,6 +59,31 @@ function toggleDebugSection() {
     toggle.textContent = '▶ Show controls';
   }
 }
+
+// Wake Lock to prevent device from sleeping
+let wakeLock = null;
+async function requestWakeLock() {
+  try {
+    if ('wakeLock' in navigator) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      console.log('Wake Lock acquired');
+      wakeLock.addEventListener('release', () => {
+        console.log('Wake Lock released');
+      });
+    }
+  } catch (err) {
+    console.log('Wake Lock error:', err.message);
+  }
+}
+// Request wake lock on page load
+requestWakeLock();
+// Re-acquire wake lock when page becomes visible again
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    requestWakeLock();
+  }
+});
+
 window._matchOrigin = performance.now();
 window._matchBuffer = [];
 window._switchPenaltyArmed = false;
@@ -70,6 +97,7 @@ const MAX_MATCH_BEATS = 16; // limit match buffer to most recent beats
 const STICKING_MISMATCH_BASE = 50000; // base penalty multiplier for sticking mismatches
 const NOTE_AGE_CUTOFF_MS = 8000; // discard notes older than this relative to end
 const MATCH_RESET_GAP_MS = 3000; // reset match if there's a long pause between hits
+const DYNAMICS_WEIGHT = 3; // weight multiplier for velocity/dynamics matching (higher = dynamics matter more)
 const TOP_CANDIDATES = 10; // number of best candidates to keep
 const PROGRESS_PENALTY = 20; // penalty if latest note does not advance to expected pattern beat
 const LOCKED_BACKWARD_PENALTY = 10000; // essentially disqualify going backward when locked
@@ -214,7 +242,7 @@ function addMatchNoteAt(nowTimeMs, velocity, sticking) {
     // call search using the same pattern setup used elsewhere, with normalized times
     try {
       console.log('Calling search with normalized match buffer (' + normalized.length + ' events)');
-      searchAcrossPatterns(normalized, 1, 1);
+      searchAcrossPatterns(normalized, DYNAMICS_WEIGHT, 1);
     } catch (err) {
       console.error('Search failed:', err);
     }
@@ -795,6 +823,43 @@ function parsePatternJSON(notes, beatMs = 256, opts = {}) {
   return extended;
 }
 
+// Pattern groups for filtering search
+const PATTERN_GROUPS = {
+  "All": null, // Special: search all patterns
+  "Rolls": [
+    "Single Stroke Roll",
+    "Double Stroke Roll",
+    "Five Stroke Roll (Right)",
+    "Five Stroke Roll (Left)",
+    "Five Stroke Roll (Alternating)",
+  ],
+  "Paradiddles": [
+    "Single Paradiddle",
+    "Double Paradiddle",
+    "Triple Paradiddle",
+  ],
+  "Flams": [
+    "Flam (Right)",
+    "Flam (Left)",
+    "Flam (Alternating)",
+    "Flam Accent",
+    "Flam Tap (Right)",
+    "Flam Tap (Left)",
+    "Flam Tap (Alternating)",
+  ],
+  "Drags": [
+    "Drag (Right)",
+    "Drag (Left)",
+    "Drag (Alternating)",
+  ],
+  "Triplets": [
+    "Down-Up-Tap Triplets",
+    "Bounce-Tap-Down Triplets",
+  ],
+};
+
+let selectedGroup = "All";
+
 // Pattern definitions using JSON structure
 // Each pattern has: notes (array), beats (optional bar length)
 const PATTERN_DEFS = {
@@ -1002,6 +1067,48 @@ function setPattern(name, renderPatternOnly = true, preserveProgress = false) {
 
   if (renderPatternOnly) {
     renderPatternMatch(window._extendedPattern, [], 1, 0);
+  }
+}
+
+function populateGroupMenu() {
+  const groupSelect = document.getElementById('groupSelect');
+  if (!groupSelect) return;
+  groupSelect.innerHTML = '';
+  Object.keys(PATTERN_GROUPS).forEach((group) => {
+    const opt = document.createElement('option');
+    opt.value = group;
+    opt.textContent = group;
+    groupSelect.appendChild(opt);
+  });
+  groupSelect.value = selectedGroup;
+  groupSelect.addEventListener('change', (evt) => {
+    selectedGroup = evt.target.value;
+    updatePatternMenuForGroup();
+    // Unlock pattern when group changes to allow new search
+    if (window._patternLocked) {
+      unlockPattern('group changed');
+    }
+  });
+}
+
+function updatePatternMenuForGroup() {
+  const select = document.getElementById('patternSelect');
+  if (!select) return;
+  const groupPatterns = PATTERN_GROUPS[selectedGroup];
+  select.innerHTML = '';
+  const patterns = groupPatterns || Object.keys(PATTERN_LIBRARY);
+  patterns.forEach((key) => {
+    if (PATTERN_LIBRARY[key]) {
+      const opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = key;
+      select.appendChild(opt);
+    }
+  });
+  // Select first pattern in group if current isn't in group
+  if (!patterns.includes(select.value) && patterns.length > 0) {
+    select.value = patterns[0];
+    setPattern(patterns[0], true);
   }
 }
 
@@ -2569,12 +2676,18 @@ function searchAcrossPatterns(match, velocityWeight, stickingWeight) {
     return;
   }
   
-  // Global search across all patterns
+  // Get patterns to search based on selected group
+  const groupPatterns = PATTERN_GROUPS[selectedGroup];
+  const patternsToSearch = groupPatterns 
+    ? Object.entries(PATTERN_LIBRARY).filter(([name]) => groupPatterns.includes(name))
+    : Object.entries(PATTERN_LIBRARY);
+  
+  // Search across patterns in the selected group
   let bestOverall = null;
   let bestPatternName = null;
   let bestOverallScore = Number.MAX_VALUE;
 
-  for (const [name, pat] of Object.entries(PATTERN_LIBRARY)) {
+  for (const [name, pat] of patternsToSearch) {
     const result = search(pat, match, velocityWeight, stickingWeight, { render: false, patternName: name });
     if (!result) continue;
     if (result.score < bestOverallScore) {
@@ -2605,12 +2718,13 @@ function searchAcrossPatterns(match, velocityWeight, stickingWeight) {
   search(PATTERN_LIBRARY[bestPatternName], match, velocityWeight, stickingWeight, { render: true, patternName: bestPatternName });
 }
 
+populateGroupMenu();
 populatePatternMenu();
 setPattern(DEFAULT_PATTERN_KEY);
 setupStickMappingUI();
 setupTempoControls();
 updateLockIndicator(); // Show initial unlocked state
-searchAcrossPatterns(diddle4, 1, 1);
+searchAcrossPatterns(diddle4, DYNAMICS_WEIGHT, 1);
 startMIDI();
 /*
 window.setTimeout(() =>
