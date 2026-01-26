@@ -823,59 +823,69 @@ function parsePatternJSON(notes, beatMs = 256, opts = {}) {
   return extended;
 }
 
-// Pattern groups for filtering search
+// Pattern groups for filtering search (uses pattern IDs)
 const PATTERN_GROUPS = {
   "All": null, // Special: search all patterns
   "Rolls": [
-    "Single Stroke Roll",
-    "Double Stroke Roll",
-    "Five Stroke Roll (Right)",
-    "Five Stroke Roll (Left)",
-    "Five Stroke Roll (Alternating)",
+    "single-stroke-roll",
+    "double-stroke-roll",
+    "five-stroke-roll-r",
+    "five-stroke-roll-l",
+    "five-stroke-roll-alt",
   ],
   "Paradiddles": [
-    "Single Paradiddle",
-    "Double Paradiddle",
-    "Triple Paradiddle",
+    "single-paradiddle",
+    "double-paradiddle",
+    "triple-paradiddle",
   ],
   "Flams": [
-    "Flam (Right)",
-    "Flam (Left)",
-    "Flam (Alternating)",
-    "Flam Accent",
-    "Flam Tap (Right)",
-    "Flam Tap (Left)",
-    "Flam Tap (Alternating)",
+    "flam-r",
+    "flam-l",
+    "flam-alt",
+    "flam-accent",
+    "flam-tap-r",
+    "flam-tap-l",
+    "flam-tap-alt",
   ],
   "Drags": [
-    "Drag (Right)",
-    "Drag (Left)",
-    "Drag (Alternating)",
+    "drag-r",
+    "drag-l",
+    "drag-alt",
   ],
   "Triplets": [
-    "Down-Up-Tap Triplets",
-    "Bounce-Tap-Down Triplets",
+    "dut-triplets",
+    "btd-triplets",
+  ],
+  "Doubles": [
+    "double-stroke-roll",
+    "triplet-double-1-r",
+    "triplet-double-1-l",
+    "triplet-double-2-r",
+    "triplet-double-2-l",
   ],
 };
 
 let selectedGroup = "All";
 
 // Pattern definitions using JSON structure
-// Each pattern has: notes (array), beats (optional bar length)
+// Each pattern has: id (stable identifier), name (display), notes (array)
 const PATTERN_DEFS = {
-  "Single Stroke Roll": {
+  "single-stroke-roll": {
+    name: "Single Stroke Roll",
     notes: [
       { type: 'note', hand: R, dur: 16 },
       { type: 'note', hand: L, dur: 16 },
     ]
   },
-  "Double Stroke Roll": {
+  "double-stroke-roll": {
+    name: "Double Stroke Roll",
     notes: [
       { type: 'double', hand: R, dur: 16 },
       { type: 'double', hand: L, dur: 16 },
     ]
   },
-  "Five Stroke Roll (Right)": {
+  "five-stroke-roll-r": {
+    name: "Five Stroke Roll (Right)",
     beamGroup: 3,
     notes: [
       { type: 'double', hand: R, dur: 16 },
@@ -883,7 +893,8 @@ const PATTERN_DEFS = {
       { type: 'note', hand: R, dur: 8, vel: ACCENT },
     ]
   },
-  "Five Stroke Roll (Left)": {
+  "five-stroke-roll-l": {
+    name: "Five Stroke Roll (Left)",
     beamGroup: 3,
     notes: [
       { type: 'double', hand: L, dur: 16 },
@@ -891,7 +902,8 @@ const PATTERN_DEFS = {
       { type: 'note', hand: L, dur: 8, vel: ACCENT },
     ]
   },
-  "Five Stroke Roll (Alternating)": {
+  "five-stroke-roll-alt": {
+    name: "Five Stroke Roll (Alternating)",
     beamGroup: 3,
     notes: [
       { type: 'double', hand: R, dur: 16 },
@@ -902,7 +914,8 @@ const PATTERN_DEFS = {
       { type: 'note', hand: L, dur: 8, vel: ACCENT },
     ]
   },
-  "Single Paradiddle": {
+  "single-paradiddle": {
+    name: "Single Paradiddle",
     notes: [
       { type: 'note', hand: R, dur: 16, vel: ACCENT },
       { type: 'note', hand: L, dur: 16 },
@@ -914,7 +927,8 @@ const PATTERN_DEFS = {
       { type: 'note', hand: L, dur: 16 },
     ]
   },
-  "Double Paradiddle": {
+  "double-paradiddle": {
+    name: "Double Paradiddle",
     time: 3,
     beamGroup: 6,
     notes: [
@@ -932,7 +946,8 @@ const PATTERN_DEFS = {
       { type: 'note', hand: L, dur: 16 },
     ]
   },
-  "Triple Paradiddle": {
+  "triple-paradiddle": {
+    name: "Triple Paradiddle",
     beamGroup: 8,
     notes: [
       { type: 'note', hand: R, dur: 16, vel: ACCENT },
@@ -953,23 +968,27 @@ const PATTERN_DEFS = {
       { type: 'note', hand: L, dur: 16 },
     ]
   },
-  "Flam (Right)": {
+  "flam-r": {
+    name: "Flam (Right)",
     notes: [
       { type: 'flam', hand: R, dur: 4 },
     ]
   },
-  "Flam (Left)": {
+  "flam-l": {
+    name: "Flam (Left)",
     notes: [
       { type: 'flam', hand: L, dur: 4 },
     ]
   },
-  "Flam (Alternating)": {
+  "flam-alt": {
+    name: "Flam (Alternating)",
     notes: [
       { type: 'flam', hand: R, dur: 4 },
       { type: 'flam', hand: L, dur: 4 },
     ]
   },
-  "Flam Accent": {
+  "flam-accent": {
+    name: "Flam Accent",
     notes: [
       { type: 'flam', hand: R, dur: 12, vel: ACCENT },
       { type: 'note', hand: L, dur: 12 },
@@ -979,35 +998,41 @@ const PATTERN_DEFS = {
       { type: 'note', hand: L, dur: 12 },
     ]
   },
-  "Drag (Right)": {
+  "drag-r": {
+    name: "Drag (Right)",
     notes: [
       { type: 'drag', hand: R, dur: 4 },
     ]
   },
-  "Drag (Left)": {
+  "drag-l": {
+    name: "Drag (Left)",
     notes: [
       { type: 'drag', hand: L, dur: 4 },
     ]
   },
-  "Drag (Alternating)": {
+  "drag-alt": {
+    name: "Drag (Alternating)",
     notes: [
       { type: 'drag', hand: R, dur: 4 },
       { type: 'drag', hand: L, dur: 4 },
     ]
   },
-  "Flam Tap (Right)": {
+  "flam-tap-r": {
+    name: "Flam Tap (Right)",
     notes: [
       { type: 'flam', hand: R, dur: 8, vel: ACCENT },
       { type: 'note', hand: L, dur: 8 },
     ]
   },
-  "Flam Tap (Left)": {
+  "flam-tap-l": {
+    name: "Flam Tap (Left)",
     notes: [
       { type: 'flam', hand: L, dur: 8, vel: ACCENT },
       { type: 'note', hand: R, dur: 8 },
     ]
   },
-  "Flam Tap (Alternating)": {
+  "flam-tap-alt": {
+    name: "Flam Tap (Alternating)",
     notes: [
       { type: 'flam', hand: R, dur: 8, vel: ACCENT },
       { type: 'note', hand: L, dur: 8 },
@@ -1015,14 +1040,16 @@ const PATTERN_DEFS = {
       { type: 'note', hand: R, dur: 8 },
     ]
   },
-  "Down-Up-Tap Triplets": {
+  "dut-triplets": {
+    name: "Down-Up-Tap Triplets",
     notes: [
       { type: 'note', hand: R, dur: 12, vel: ACCENT, label: 'D' },
       { type: 'note', hand: L, dur: 12, label: 'U' },
       { type: 'note', hand: R, dur: 12, label: 'T' },
     ]
   },
-  "Bounce-Tap-Down Triplets": {
+  "btd-triplets": {
+    name: "Bounce-Tap-Down Triplets",
     notes: [
       { type: 'note', hand: R, dur: 12, vel: ACCENT, label: 'B' },
       { type: 'note', hand: L, dur: 12, label: 'T' },
@@ -1032,38 +1059,79 @@ const PATTERN_DEFS = {
       { type: 'note', hand: R, dur: 12, label: 'T' },
     ]
   },
+  "triplet-double-1-r": {
+    name: "Triplet Double Stroke 1 (Right)",
+    beamGroup: 3,
+    notes: [
+      { type: 'note', hand: R, dur: 12 },
+      { type: 'note', hand: L, dur: 12 },
+      { type: 'double', hand: R, dur: 12 },
+    ]
+  },
+  "triplet-double-1-l": {
+    name: "Triplet Double Stroke 1 (Left)",
+    beamGroup: 3,
+    notes: [
+      { type: 'note', hand: L, dur: 12 },
+      { type: 'note', hand: R, dur: 12 },
+      { type: 'double', hand: L, dur: 12 },
+    ]
+  },
+  "triplet-double-2-r": {
+    name: "Triplet Double Stroke 2 (Right)",
+    beamGroup: 3,
+    notes: [
+      { type: 'note', hand: R, dur: 12 },
+      { type: 'double', hand: L, dur: 12 },
+      { type: 'double', hand: R, dur: 12 },
+    ]
+  },
+  "triplet-double-2-l": {
+    name: "Triplet Double Stroke 2 (Right)",
+    beamGroup: 3,
+    notes: [
+      { type: 'note', hand: L, dur: 12 },
+      { type: 'double', hand: R, dur: 12 },
+      { type: 'double', hand: L, dur: 12 },
+    ]
+  },
 };
 
-// Build PATTERN_LIBRARY from PATTERN_DEFS
+// Build PATTERN_LIBRARY from PATTERN_DEFS (keyed by ID)
 const PATTERN_LIBRARY = {};
-for (const [name, def] of Object.entries(PATTERN_DEFS)) {
-  PATTERN_LIBRARY[name] = parsePatternJSON(def.notes, 256, { repeat: true });
+for (const [id, def] of Object.entries(PATTERN_DEFS)) {
+  PATTERN_LIBRARY[id] = parsePatternJSON(def.notes, 256, { repeat: true });
 }
 
-const DEFAULT_PATTERN_KEY = 'paradiddle';
+// Get display name for a pattern ID
+function getPatternName(id) {
+  return PATTERN_DEFS[id]?.name || id;
+}
 
-function setPattern(name, renderPatternOnly = true, preserveProgress = false) {
-  const resolvedName = PATTERN_LIBRARY[name] ? name : DEFAULT_PATTERN_KEY;
-  const pat = PATTERN_LIBRARY[resolvedName] || PATTERN_LIBRARY[DEFAULT_PATTERN_KEY];
+const DEFAULT_PATTERN_KEY = 'single-paradiddle';
+
+function setPattern(id, renderPatternOnly = true, preserveProgress = false) {
+  const resolvedId = PATTERN_LIBRARY[id] ? id : DEFAULT_PATTERN_KEY;
+  const pat = PATTERN_LIBRARY[resolvedId] || PATTERN_LIBRARY[DEFAULT_PATTERN_KEY];
   window._extendedPattern = pat;
   
   // Only reset progress if switching to a different pattern and not preserving
-  if (!preserveProgress || window._currentPatternName !== resolvedName) {
+  if (!preserveProgress || window._currentPatternName !== resolvedId) {
     window._lastMatchedPatternIdx = null;
     window._noteErrors = {}; // clear timing errors when pattern changes
   }
-  window._currentPatternName = resolvedName;
+  window._currentPatternName = resolvedId;
 
   const title = document.getElementById('patternTitle');
-  if (title) title.textContent = resolvedName;
+  if (title) title.textContent = getPatternName(resolvedId);
 
   const select = document.getElementById('patternSelect');
-  if (select && select.value !== resolvedName && PATTERN_LIBRARY[resolvedName]) {
-    select.value = resolvedName;
+  if (select && select.value !== resolvedId && PATTERN_LIBRARY[resolvedId]) {
+    select.value = resolvedId;
   }
 
   // Render the musical notation for this pattern
-  renderNotation(resolvedName);
+  renderNotation(resolvedId);
 
   if (renderPatternOnly) {
     renderPatternMatch(window._extendedPattern, [], 1, 0);
@@ -1094,21 +1162,21 @@ function populateGroupMenu() {
 function updatePatternMenuForGroup() {
   const select = document.getElementById('patternSelect');
   if (!select) return;
-  const groupPatterns = PATTERN_GROUPS[selectedGroup];
+  const groupPatternIds = PATTERN_GROUPS[selectedGroup];
   select.innerHTML = '';
-  const patterns = groupPatterns || Object.keys(PATTERN_LIBRARY);
-  patterns.forEach((key) => {
-    if (PATTERN_LIBRARY[key]) {
+  const patternIds = groupPatternIds || Object.keys(PATTERN_LIBRARY);
+  patternIds.forEach((id) => {
+    if (PATTERN_LIBRARY[id]) {
       const opt = document.createElement('option');
-      opt.value = key;
-      opt.textContent = key;
+      opt.value = id;
+      opt.textContent = getPatternName(id);
       select.appendChild(opt);
     }
   });
   // Select first pattern in group if current isn't in group
-  if (!patterns.includes(select.value) && patterns.length > 0) {
-    select.value = patterns[0];
-    setPattern(patterns[0], true);
+  if (!patternIds.includes(select.value) && patternIds.length > 0) {
+    select.value = patternIds[0];
+    setPattern(patternIds[0], true);
   }
 }
 
@@ -1116,21 +1184,21 @@ function populatePatternMenu() {
   const select = document.getElementById('patternSelect');
   if (!select) return;
   select.innerHTML = '';
-  Object.keys(PATTERN_LIBRARY).forEach((key) => {
+  Object.keys(PATTERN_LIBRARY).forEach((id) => {
     const opt = document.createElement('option');
-    opt.value = key;
-    opt.textContent = key;
+    opt.value = id;
+    opt.textContent = getPatternName(id);
     select.appendChild(opt);
   });
   select.value = DEFAULT_PATTERN_KEY;
   select.addEventListener('change', (evt) => {
-    const name = evt.target.value;
-    setPattern(name, true);
+    const id = evt.target.value;
+    setPattern(id, true);
     if (window._matchBuffer && window._matchBuffer.length > 0) {
       const firstTime = window._matchBuffer[0].time;
       const normalized = window._matchBuffer.map((m) => ({ time: m.time - firstTime, velocity: m.velocity, sticking: m.sticking }));
       // Run search only against the selected pattern so the user choice is respected
-      search(window._extendedPattern, normalized, 1, 1, { render: true, patternName: name });
+      search(window._extendedPattern, normalized, 1, 1, { render: true, patternName: id });
     }
   });
 }
@@ -2667,41 +2735,41 @@ function search(pattern, match, velocityWeight, stickingWeight, opts = {}) {
 function searchAcrossPatterns(match, velocityWeight, stickingWeight) {
   if (!match || !match.length) return;
   
-  const currentName = window._currentPatternName || null;
+  const currentId = window._currentPatternName || null;
   
   // If pattern is locked, only search the current pattern
-  if (window._patternLocked && currentName && PATTERN_LIBRARY[currentName]) {
-    console.log('Pattern locked to "' + currentName + '" - skipping global search');
-    search(PATTERN_LIBRARY[currentName], match, velocityWeight, stickingWeight, { render: true, patternName: currentName });
+  if (window._patternLocked && currentId && PATTERN_LIBRARY[currentId]) {
+    console.log('Pattern locked to "' + getPatternName(currentId) + '" - skipping global search');
+    search(PATTERN_LIBRARY[currentId], match, velocityWeight, stickingWeight, { render: true, patternName: currentId });
     return;
   }
   
   // Get patterns to search based on selected group
-  const groupPatterns = PATTERN_GROUPS[selectedGroup];
-  const patternsToSearch = groupPatterns 
-    ? Object.entries(PATTERN_LIBRARY).filter(([name]) => groupPatterns.includes(name))
+  const groupPatternIds = PATTERN_GROUPS[selectedGroup];
+  const patternsToSearch = groupPatternIds 
+    ? Object.entries(PATTERN_LIBRARY).filter(([id]) => groupPatternIds.includes(id))
     : Object.entries(PATTERN_LIBRARY);
   
   // Search across patterns in the selected group
   let bestOverall = null;
-  let bestPatternName = null;
+  let bestPatternId = null;
   let bestOverallScore = Number.MAX_VALUE;
 
-  for (const [name, pat] of patternsToSearch) {
-    const result = search(pat, match, velocityWeight, stickingWeight, { render: false, patternName: name });
+  for (const [id, pat] of patternsToSearch) {
+    const result = search(pat, match, velocityWeight, stickingWeight, { render: false, patternName: id });
     if (!result) continue;
     if (result.score < bestOverallScore) {
       bestOverallScore = result.score;
       bestOverall = result;
-      bestPatternName = name;
+      bestPatternId = id;
     }
   }
 
-  if (!bestOverall || !bestPatternName) return;
+  if (!bestOverall || !bestPatternId) return;
 
   // Switch to the winning pattern - preserve progress if staying on same pattern
-  const samePattern = bestPatternName === currentName;
-  setPattern(bestPatternName, true, samePattern);
+  const samePattern = bestPatternId === currentId;
+  setPattern(bestPatternId, true, samePattern);
 
   // Check if we should lock onto this pattern
   const shouldLock = match.length >= STICKY_MIN_NOTES && bestOverall.score <= STICKY_SCORE_THRESHOLD;
@@ -2709,13 +2777,13 @@ function searchAcrossPatterns(match, velocityWeight, stickingWeight) {
     window._patternLocked = true;
     window._recentScores = []; // Clear score history on lock
     updateLockIndicator();
-    console.log('Pattern LOCKED to "' + bestPatternName + '" (score: ' + bestOverall.score.toFixed(2) + ', notes: ' + match.length + ')');
+    console.log('Pattern LOCKED to "' + getPatternName(bestPatternId) + '" (score: ' + bestOverall.score.toFixed(2) + ', notes: ' + match.length + ')');
   } else if (!window._patternLocked) {
     console.log('Pattern not yet locked (score: ' + bestOverall.score.toFixed(2) + ', notes: ' + match.length + ', need score <= ' + STICKY_SCORE_THRESHOLD + ' and notes >= ' + STICKY_MIN_NOTES + ')');
   }
 
   // Render and log using the winning pattern; re-run search for side effects/state updates
-  search(PATTERN_LIBRARY[bestPatternName], match, velocityWeight, stickingWeight, { render: true, patternName: bestPatternName });
+  search(PATTERN_LIBRARY[bestPatternId], match, velocityWeight, stickingWeight, { render: true, patternName: bestPatternId });
 }
 
 populateGroupMenu();
