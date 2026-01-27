@@ -1046,19 +1046,30 @@ const PATTERN_DEFS = {
       { type: 'note', hand: R, dur: 12, label: 'T' },
     ]
   },
-  "btd-triplets": {
-    name: "Bounce-Tap-Down Triplets",
+  "btd-triplets-r": {
+    name: "Bounce-Tap-Down Triplets (Right)",
     notes: [
       { type: 'note', hand: R, dur: 12, vel: ACCENT, label: 'B' },
       { type: 'note', hand: L, dur: 12, label: 'T' },
       { type: 'note', hand: R, dur: 12, vel: ACCENT, label: 'D' },
       { type: 'note', hand: L, dur: 12, label: 'T' },
+      { type: 'note', hand: R, dur: 12, label: 'U' },
+      { type: 'note', hand: L, dur: 12, label: 'T' },
+    ]
+  },
+  "btd-triplets-l": {
+    name: "Bounce-Tap-Down Triplets (Left)",
+    notes: [
+      { type: 'note', hand: L, dur: 12, vel: ACCENT, label: 'B' },
+      { type: 'note', hand: R, dur: 12, label: 'T' },
+      { type: 'note', hand: L, dur: 12, vel: ACCENT, label: 'D' },
+      { type: 'note', hand: R, dur: 12, label: 'T' },
       { type: 'note', hand: L, dur: 12, label: 'U' },
       { type: 'note', hand: R, dur: 12, label: 'T' },
     ]
   },
   "triplet-double-1": {
-    name: "Triplet Double Stroke 1 (Right)",
+    name: "Triplet Double Stroke 1",
     beamGroup: 3,
     notes: [
       { type: 'note', hand: R, dur: 12 },
@@ -1070,7 +1081,7 @@ const PATTERN_DEFS = {
     ]
   },
   "triplet-double-2": {
-    name: "Triplet Double Stroke 2 (Right)",
+    name: "Triplet Double Stroke 2",
     beamGroup: 3,
     notes: [
       { type: 'note', hand: R, dur: 12 },
