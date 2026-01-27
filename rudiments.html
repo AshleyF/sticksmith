@@ -858,10 +858,8 @@ const PATTERN_GROUPS = {
   ],
   "Doubles": [
     "double-stroke-roll",
-    "triplet-double-1-r",
-    "triplet-double-1-l",
-    "triplet-double-2-r",
-    "triplet-double-2-l",
+    "triplet-double-1",
+    "triplet-double-2",
   ],
 };
 
@@ -1059,37 +1057,25 @@ const PATTERN_DEFS = {
       { type: 'note', hand: R, dur: 12, label: 'T' },
     ]
   },
-  "triplet-double-1-r": {
+  "triplet-double-1": {
     name: "Triplet Double Stroke 1 (Right)",
     beamGroup: 3,
     notes: [
       { type: 'note', hand: R, dur: 12 },
       { type: 'note', hand: L, dur: 12 },
       { type: 'double', hand: R, dur: 12 },
-    ]
-  },
-  "triplet-double-1-l": {
-    name: "Triplet Double Stroke 1 (Left)",
-    beamGroup: 3,
-    notes: [
       { type: 'note', hand: L, dur: 12 },
       { type: 'note', hand: R, dur: 12 },
       { type: 'double', hand: L, dur: 12 },
     ]
   },
-  "triplet-double-2-r": {
+  "triplet-double-2": {
     name: "Triplet Double Stroke 2 (Right)",
     beamGroup: 3,
     notes: [
       { type: 'note', hand: R, dur: 12 },
       { type: 'double', hand: L, dur: 12 },
       { type: 'double', hand: R, dur: 12 },
-    ]
-  },
-  "triplet-double-2-l": {
-    name: "Triplet Double Stroke 2 (Right)",
-    beamGroup: 3,
-    notes: [
       { type: 'note', hand: L, dur: 12 },
       { type: 'double', hand: R, dur: 12 },
       { type: 'double', hand: L, dur: 12 },
