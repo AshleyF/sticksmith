@@ -854,7 +854,8 @@ const PATTERN_GROUPS = {
   ],
   "Triplets": [
     "dut-triplets",
-    "btd-triplets",
+    "btd-triplets-r",
+    "btd-triplets-l",
   ],
   "Doubles": [
     "double-stroke-roll",
@@ -1170,8 +1171,8 @@ function updatePatternMenuForGroup() {
       select.appendChild(opt);
     }
   });
-  // Select first pattern in group if current isn't in group
-  if (!patternIds.includes(select.value) && patternIds.length > 0) {
+  // Always select the first pattern when a group is selected
+  if (patternIds.length > 0) {
     select.value = patternIds[0];
     setPattern(patternIds[0], true);
   }
@@ -1942,15 +1943,14 @@ function computeTimingErrors(pattern, match, latestPatternIdx) {
     : latestPatternIdx;
   const latestNotationIdx = anchoredLatestIdx % hitsPerCycle;
   
-  // Clear errors for the notation index we're updating (wrap-around clears old errors)
+  // Clear errors ONLY for the current note (where the cursor is)
+  // Past notes keep their errors - they'll clear naturally on the next cycle
   window._noteErrors[latestNotationIdx] = [];
   
-  // Clear dynamics errors for the notation index being updated
-  // (dynamics errors are keyed by originalPatternIdx, so clear any that map to this notation index)
+  // Clear dynamics errors for the current note only
   if (window._dynamicsErrors) {
     for (const key of Object.keys(window._dynamicsErrors)) {
       const idx = parseInt(key);
-      // Clear if this dynamics error's notation index matches
       if (idx === latestNotationIdx) {
         delete window._dynamicsErrors[key];
       }
@@ -2035,8 +2035,8 @@ function computeTimingErrors(pattern, match, latestPatternIdx) {
   for (const assignment of matchAssignments) {
     const { notationIdx, originalPatternIdx, timingError, alreadyMatched, matchSticking, patternSticking, stickingMismatch, isGrace, graceOffset, missedAccent, missedGhost } = assignment;
     
-    // Only update errors for the note we just matched (latestNotationIdx)
-    // This ensures we clear old errors on wrap-around
+    // Only update errors for the current note (where the cursor is)
+    // Past notes keep their errors - no retroactive changes
     if (notationIdx !== latestNotationIdx) continue;
     
     // Determine which sticking to display: user's if available, otherwise pattern's
@@ -2056,17 +2056,9 @@ function computeTimingErrors(pattern, match, latestPatternIdx) {
       delete window._dynamicsErrors[originalPatternIdx];
     }
     
-    // Check for sticking error (even if timing is good)
-    if (stickingMismatch) {
-      window._noteErrors[notationIdx].push({ 
-        type: 'sticking', 
-        offsetRatio: 0, 
-        sticking: displaySticking,
-        patternSticking,
-        isGrace,
-        graceOffset
-      });
-    }
+    // Only one error per note, with priority: timing > sticking > extra
+    // Timing errors already show sticking info in their rendering, so sticking-only errors
+    // are only needed when timing is OK but sticking is wrong
     
     // Check if timing is within dead zone
     const timingOk = Math.abs(timingError) <= TIMING_DEAD_ZONE_MS;
@@ -2076,30 +2068,40 @@ function computeTimingErrors(pattern, match, latestPatternIdx) {
       const offsetRatio = timingError / beatDurationMs;
       
       if (timingError < 0) {
-        // Rushing (early)
+        // Rushing (early) - this is the primary error, includes sticking info
         window._noteErrors[notationIdx].push({ 
           type: 'rush', 
           offsetRatio, 
           sticking: displaySticking,
           patternSticking,
           isGrace,
-          graceOffset
+          graceOffset,
+          stickingMismatch
         });
       } else {
-        // Dragging (late)
+        // Dragging (late) - this is the primary error, includes sticking info
         window._noteErrors[notationIdx].push({ 
           type: 'drag', 
           offsetRatio, 
           sticking: displaySticking,
           patternSticking,
           isGrace,
-          graceOffset
+          graceOffset,
+          stickingMismatch
         });
       }
-    }
-    
-    // Extra hit on same beat (double-matched)
-    if (alreadyMatched) {
+    } else if (stickingMismatch) {
+      // Timing is OK but sticking is wrong - show sticking error only
+      window._noteErrors[notationIdx].push({ 
+        type: 'sticking', 
+        offsetRatio: 0, 
+        sticking: displaySticking,
+        patternSticking,
+        isGrace,
+        graceOffset
+      });
+    } else if (alreadyMatched) {
+      // Extra hit on same beat (double-matched) - only if no other error
       window._noteErrors[notationIdx].push({ 
         type: 'extra', 
         offsetRatio: timingError / beatDurationMs, 
@@ -2111,7 +2113,7 @@ function computeTimingErrors(pattern, match, latestPatternIdx) {
     }
   }
   
-  // Check for misses: pattern notes near the latest that weren't matched
+  // Check for misses: pattern notes near the current note that weren't matched
   // Only mark as missed if they're between the first and last matched pattern indices
   let firstMatched = -1, lastMatched = -1;
   for (let pi = 0; pi < pattern.length; pi++) {
@@ -2131,10 +2133,8 @@ function computeTimingErrors(pattern, match, latestPatternIdx) {
         const patSticking = pattern[pi].sticking || 'R';
         // Get note info for the original hit (not anchored) to know if it's a grace note
         const noteInfo = noteInfoMap[pi % hitsPerCycle] || { isGrace: false, graceOffset: 0 };
-        // Only update if this is the notation index we just passed
-        // (to avoid clearing valid data or adding stale misses)
-        if (notationIdx === latestNotationIdx || 
-            (notationIdx === (latestNotationIdx - 1 + hitsPerCycle) % hitsPerCycle)) {
+        // Only add miss errors for the current note (no retroactive misses)
+        if (notationIdx === latestNotationIdx) {
           if (!window._noteErrors[notationIdx]) window._noteErrors[notationIdx] = [];
           window._noteErrors[notationIdx].push({ 
             type: 'miss', 
