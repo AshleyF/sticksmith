@@ -181,8 +181,9 @@ function unlockPattern(reason) {
   console.log('Pattern unlocked: ' + reason);
 }
 
-function addMatchNoteAt(nowTimeMs, velocity, sticking) {
+function addMatchNoteAt(nowTimeMs, velocity, sticking, inst) {
   let t = nowTimeMs - window._matchOrigin;
+  const instrument = inst || 'S'; // default to snare
   
   // Clear any pending unlock timeout and start a new one
   if (window._unlockTimeout) {
@@ -215,7 +216,7 @@ function addMatchNoteAt(nowTimeMs, velocity, sticking) {
     }
   }
   if (!window._switchPenaltyArmed) window._switchPenaltyArmed = true;
-  window._matchBuffer.push({ time: t, velocity: Number(velocity || 0), sticking: sticking || '' });
+  window._matchBuffer.push({ time: t, velocity: Number(velocity || 0), sticking: sticking || '', inst: instrument });
   // prune old notes
   // Use a dynamic match window based on the extended pattern length
   const patternLength = window._extendedPattern[window._extendedPattern.length - 1].time - window._extendedPattern[0].time;
@@ -237,7 +238,7 @@ function addMatchNoteAt(nowTimeMs, velocity, sticking) {
   // prepare a normalized copy of the match buffer that starts at time=0
   if (window._matchBuffer.length > 0) {
     const firstTime = window._matchBuffer[0].time;
-    const normalized = window._matchBuffer.map((m) => ({ time: m.time - firstTime, velocity: m.velocity, sticking: m.sticking }));
+    const normalized = window._matchBuffer.map((m) => ({ time: m.time - firstTime, velocity: m.velocity, sticking: m.sticking, inst: m.inst }));
     console.log('Match times: [' + normalized.map((m) => m.time.toFixed(0)).join(', ') + ']');
     // call search using the same pattern setup used elsewhere, with normalized times
     try {
@@ -348,21 +349,28 @@ function setupStickMappingUI() {
 window.addEventListener('keydown', (evt) => {
   const key = (evt.key || '').toLowerCase();
   const now = performance.now();
+  // Snare with sticking
   if (key === 'e') {
-    addMatchNoteAt(now, 64, 'R');
+    addMatchNoteAt(now, 64, 'R', 'S');
   } else if (key === 'n') {
-    addMatchNoteAt(now, 127, 'R');
+    addMatchNoteAt(now, 127, 'R', 'S');
   } else if (key === 'i') {
-    addMatchNoteAt(now, 32, 'R');
+    addMatchNoteAt(now, 32, 'R', 'S');
   } else if (key === 's') {
-    addMatchNoteAt(now, 64, 'L');
+    addMatchNoteAt(now, 64, 'L', 'S');
   } else if (key === 'r') {
-    addMatchNoteAt(now, 32, 'L');
+    addMatchNoteAt(now, 32, 'L', 'S');
   } else if (key === 't') {
-    addMatchNoteAt(now, 127, 'L');
+    addMatchNoteAt(now, 127, 'L', 'S');
+  // Snare without sticking
+  } else if (key === 'f') {
+    addMatchNoteAt(now, 64, '', 'S');
+  // Hi-hat
+  } else if (key === 'u') {
+    addMatchNoteAt(now, 64, 'R', 'H');
+  // Kick
   } else if (key === ' ') {
-    // Spacebar: normal hit with no sticking label
-    addMatchNoteAt(now, 64, '');
+    addMatchNoteAt(now, 64, '', 'K');
   } else {
     return;
   }
@@ -470,8 +478,10 @@ function handleInputsAndOutputs(midiAccess) {
           if (map.R && map.R.has(note)) sticking = 'R';
           else if (map.L && map.L.has(note)) sticking = 'L';
           else sticking = stickingFromSnareAngle(window._snareAngleCc);
+          // Detect instrument from MIDI note
+          const inst = instrumentFromMidiNote(note);
           // Use performance.now() for timing accuracy
-          addMatchNoteAt(performance.now(), data2, sticking);
+          addMatchNoteAt(performance.now(), data2, sticking, inst);
         }
       }
     } catch (e) {
@@ -589,13 +599,39 @@ function score(pattern, match, velocityWeight, stickingWeight) {
   var alreadyMatched = [];
   var start = pattern[0].time; // pattern start
   var end = match[match.length - 1].time;
+  
+  // Get the set of instruments being played (from match buffer)
+  // This allows partial matching - e.g. only kick matches kick pattern notes
+  const matchInstruments = new Set();
+  for (const m of match) {
+    if (m.inst) matchInstruments.add(m.inst);
+  }
+  // If no instrument info, default to matching all
+  const filterByInstrument = matchInstruments.size > 0;
+  
+  // Filter pattern to only include notes for instruments being played
+  // This allows practicing just the kick, just the snare, etc.
+  const filteredPattern = filterByInstrument 
+    ? pattern.filter(p => !p.inst || matchInstruments.has(p.inst))
+    : pattern;
+  
+  // If filtered pattern is empty, can't match
+  if (!filteredPattern.length) {
+    return { dynamics: Number.MAX_VALUE, timing: Number.MAX_VALUE, reuseCount: 0, gapCount: 0, stickingCount: 0 };
+  }
+  
+  // Also filter match to only include matching instruments (for drumkit patterns)
+  const filteredMatch = filterByInstrument
+    ? match.filter(m => !m.inst || matchInstruments.has(m.inst))
+    : match;
   // Discard match notes older than the decay window relative to the last note
   var recentCutoff = end - SCORE_DECAY_MS;
-  var filtered = match.filter((m) => m.time >= recentCutoff);
+  var filtered = filteredMatch.filter((m) => m.time >= recentCutoff);
     if (!filtered.length) return { dynamics: Number.MAX_VALUE, timing: Number.MAX_VALUE, reuseCount: reuseCount, gapCount: gapCount, stickingCount: stickingCount };
-  match = filtered;
-  for (var i = 0; i < match.length; i++) {
-    var m = match[i];
+  // Use filtered pattern for scoring
+  const scoringPattern = filteredPattern;
+  for (var i = 0; i < filtered.length; i++) {
+    var m = filtered[i];
     if (end - m.time > NOTE_AGE_CUTOFF_MS) {
       break;
     }
@@ -605,8 +641,10 @@ function score(pattern, match, velocityWeight, stickingWeight) {
     var velTerm = 0;
     var stickPenalty = 0;
     var bestStickMismatch = 0;
-    for (var j = 0; j < pattern.length; j++) {
-      var pp = pattern[j];
+    for (var j = 0; j < scoringPattern.length; j++) {
+      var pp = scoringPattern[j];
+      // Check instrument match (skip if instrument doesn't match)
+      if (filterByInstrument && m.inst && pp.inst && m.inst !== pp.inst) continue;
       var dd = square(pp.time - m.time);
       if (dd < d) {
         const stickingMismatch = (m.sticking === '' || pp.sticking == m.sticking) ? 0 : 1;
@@ -637,7 +675,7 @@ function score(pattern, match, velocityWeight, stickingWeight) {
   // Penalize gaps: pattern beats between the first and last matched beat that remain unmatched
   var firstIdx = -1;
   var lastIdx = -1;
-  for (var k = 0; k < pattern.length; k++) {
+  for (var k = 0; k < scoringPattern.length; k++) {
     if (alreadyMatched[k]) {
       if (firstIdx === -1) firstIdx = k;
       lastIdx = k;
@@ -729,16 +767,88 @@ function toNumericVelocity(v) {
 //   - flam: grace note is opposite hand, main note uses 'hand' and 'vel'
 //   - drag: two grace notes opposite hand, main note uses 'hand' and 'vel'
 //   - double: two notes same hand, first can have 'vel', second is normal
+//
+// Pattern types:
+//   - 'rudiment' (default): single-line notation, sticking above/below
+//   - 'drumkit': full drum staff with multiple instruments
+//
+// Extended note format for drumkit patterns:
+//   - inst: instrument code (S=snare, K=kick, H=hi-hat, R=ride, C=crash,
+//           T1=high tom, T2=mid tom, T3=floor tom, HF=hi-hat foot)
+//   - For simultaneous hits, use 'voices' array instead of single note
+//   - Notes without 'inst' default to snare (S)
 
 // Shorthand helpers for concise pattern entry
 const R = 'R', L = 'L';
 const ACCENT = 'accent', GHOST = 'ghost', NORMAL = 'normal';
 
+// Instrument codes for drumkit patterns
+const INST = {
+  S: 'snare',
+  K: 'kick',
+  H: 'hihat',
+  R: 'ride',
+  C: 'crash',
+  T1: 'tom1',   // high tom
+  T2: 'tom2',   // mid tom
+  T3: 'tom3',   // floor tom
+  HF: 'hihat-foot'  // hi-hat pedal
+};
+
+// Shorthand instrument constants
+const S = 'S', K = 'K', H = 'H', HF = 'HF';
+const RIDE = 'R', CRASH = 'C';  // RIDE to avoid conflict with R='R' for right hand
+const T1 = 'T1', T2 = 'T2', T3 = 'T3';
+
+// General MIDI drum note to instrument mapping
+// Based on GM1 Sound Set standard
+const MIDI_DRUM_MAP = {
+  // Kick drums
+  35: 'K', // Acoustic Bass Drum
+  36: 'K', // Bass Drum 1
+  // Snare drums
+  38: 'S', // Acoustic Snare
+  40: 'S', // Electric Snare
+  37: 'S', // Side Stick
+  // Hi-hat
+  42: 'H', // Closed Hi-Hat
+  44: 'HF', // Pedal Hi-Hat (foot)
+  46: 'H', // Open Hi-Hat
+  // Toms
+  50: 'T1', // High Tom
+  48: 'T1', // Hi-Mid Tom
+  47: 'T2', // Low-Mid Tom
+  45: 'T2', // Low Tom
+  43: 'T3', // High Floor Tom
+  41: 'T3', // Low Floor Tom
+  // Cymbals
+  49: 'C', // Crash Cymbal 1
+  57: 'C', // Crash Cymbal 2
+  51: 'R', // Ride Cymbal 1
+  59: 'R', // Ride Cymbal 2
+  53: 'R', // Ride Bell
+  52: 'C', // Chinese Cymbal
+  55: 'C', // Splash Cymbal
+  // Extended snare (Roland pads)
+  23: 'S', // Snare Brush
+  19: 'S', // Snare Head (wires off)
+  18: 'S', // Snare Rim (wires off)
+  16: 'S', // Snare Brush (wires off)
+  17: 'S', // Snare XStick (wires off)
+};
+
+// Get instrument code from MIDI note number
+function instrumentFromMidiNote(note) {
+  return MIDI_DRUM_MAP[note] || 'S'; // default to snare if unknown
+}
+
 // Parse JSON pattern definition into timed events
-// Returns array of { time, velocity, sticking }
+// Returns array of { time, velocity, sticking, inst? }
+// For drumkit patterns, each event also has 'inst' (instrument code)
 function parsePatternJSON(notes, beatMs = 256, opts = {}) {
   if (!notes || !Array.isArray(notes)) return [];
-  const { repeat = false } = opts;
+  const { repeat = false, patternType = 'rudiment' } = opts;
+  const isDrumkit = patternType === 'drumkit';
   const events = [];
   let t = 0;
   let hitCount = 0;
@@ -761,6 +871,22 @@ function parsePatternJSON(notes, beatMs = 256, opts = {}) {
     const dur = n.dur || 16;
     const vel = n.vel || 'normal';
     const durMs = durToMs(dur);
+    const inst = n.inst || 'S';  // default to snare
+    
+    // Handle multi-voice (simultaneous hits on different instruments)
+    if (n.voices && Array.isArray(n.voices)) {
+      for (const v of n.voices) {
+        const vHand = v.hand || 'R';
+        const vVel = v.vel || 'normal';
+        const vInst = v.inst || 'S';
+        const event = { time: t, velocity: vVel, sticking: vHand };
+        if (isDrumkit) event.inst = vInst;
+        events.push(event);
+        hitCount++;
+      }
+      t += durMs;
+      continue;
+    }
 
     if (type === 'rest') {
       t += durMs;
@@ -768,7 +894,9 @@ function parsePatternJSON(notes, beatMs = 256, opts = {}) {
     }
 
     if (type === 'note') {
-      events.push({ time: t, velocity: vel, sticking: hand });
+      const event = { time: t, velocity: vel, sticking: hand };
+      if (isDrumkit) event.inst = inst;
+      events.push(event);
       t += durMs;
       hitCount++;
       continue;
@@ -778,8 +906,11 @@ function parsePatternJSON(notes, beatMs = 256, opts = {}) {
       // Two notes same hand, evenly spaced within duration
       // First note gets the specified velocity, second is normal
       const spacing = durMs / 2;
-      events.push({ time: t, velocity: vel, sticking: hand });
-      events.push({ time: t + spacing, velocity: 'normal', sticking: hand });
+      const e1 = { time: t, velocity: vel, sticking: hand };
+      const e2 = { time: t + spacing, velocity: 'normal', sticking: hand };
+      if (isDrumkit) { e1.inst = inst; e2.inst = inst; }
+      events.push(e1);
+      events.push(e2);
       t += durMs;
       hitCount += 2;
       continue;
@@ -788,8 +919,11 @@ function parsePatternJSON(notes, beatMs = 256, opts = {}) {
     if (type === 'flam') {
       // Grace note (opposite hand) + main note (specified hand and velocity)
       const graceHand = hand === 'R' ? 'L' : 'R';
-      events.push({ time: t, velocity: 'normal', sticking: graceHand });
-      events.push({ time: t + FLAM_OFFSET_MS, velocity: vel, sticking: hand });
+      const e1 = { time: t, velocity: 'normal', sticking: graceHand };
+      const e2 = { time: t + FLAM_OFFSET_MS, velocity: vel, sticking: hand };
+      if (isDrumkit) { e1.inst = inst; e2.inst = inst; }
+      events.push(e1);
+      events.push(e2);
       t += durMs;
       hitCount += 2;
       continue;
@@ -798,9 +932,13 @@ function parsePatternJSON(notes, beatMs = 256, opts = {}) {
     if (type === 'drag') {
       // Two grace notes (opposite hand) + main note (specified hand and velocity)
       const graceHand = hand === 'R' ? 'L' : 'R';
-      events.push({ time: t, velocity: 'ghost', sticking: graceHand });
-      events.push({ time: t + DRAG_OFFSET_MS, velocity: 'ghost', sticking: graceHand });
-      events.push({ time: t + DRAG_OFFSET_MS * 2, velocity: vel, sticking: hand });
+      const e1 = { time: t, velocity: 'ghost', sticking: graceHand };
+      const e2 = { time: t + DRAG_OFFSET_MS, velocity: 'ghost', sticking: graceHand };
+      const e3 = { time: t + DRAG_OFFSET_MS * 2, velocity: vel, sticking: hand };
+      if (isDrumkit) { e1.inst = inst; e2.inst = inst; e3.inst = inst; }
+      events.push(e1);
+      events.push(e2);
+      events.push(e3);
       t += durMs;
       hitCount += 3;
       continue;
@@ -817,7 +955,9 @@ function parsePatternJSON(notes, beatMs = 256, opts = {}) {
   for (let r = 0; r < repeats; r++) {
     const offset = r * t;
     for (const e of events) {
-      extended.push({ time: e.time + offset, velocity: e.velocity, sticking: e.sticking });
+      const ext = { time: e.time + offset, velocity: e.velocity, sticking: e.sticking };
+      if (e.inst) ext.inst = e.inst;
+      extended.push(ext);
     }
   }
   return extended;
@@ -862,9 +1002,12 @@ const PATTERN_GROUPS = {
     "triplet-double-1",
     "triplet-double-2",
   ],
+  "Drumkit": [
+    "basic-rock",
+  ],
 };
 
-let selectedGroup = "All";
+let selectedGroup = "Drumkit";
 
 // Pattern definitions using JSON structure
 // Each pattern has: id (stable identifier), name (display), notes (array)
@@ -1093,12 +1236,32 @@ const PATTERN_DEFS = {
       { type: 'double', hand: L, dur: 12 },
     ]
   },
+  // ========== DRUMKIT PATTERNS ==========
+  "basic-rock": {
+    name: "Basic Rock Beat",
+    type: 'drumkit',
+    notes: [
+      // Bar 1: standard rock pattern
+      { dur: 8, voices: [{ inst: K }, { inst: H }] },           // 1 - kick + hi-hat
+      { dur: 8, inst: H },                                       // & - hi-hat
+      { dur: 8, voices: [{ inst: S }, { inst: H }] },  // 2 - snare + hi-hat
+      { dur: 8, inst: H },                                       // & - hi-hat
+      { dur: 8, voices: [{ inst: K }, { inst: H }] },           // 3 - kick + hi-hat
+      { dur: 8, inst: H },                                       // & - hi-hat
+      { dur: 8, voices: [{ inst: S }, { inst: H }] },  // 4 - snare + hi-hat
+      { dur: 8, inst: H },                                       // & - hi-hat
+    ]
+  },
 };
 
 // Build PATTERN_LIBRARY from PATTERN_DEFS (keyed by ID)
 const PATTERN_LIBRARY = {};
 for (const [id, def] of Object.entries(PATTERN_DEFS)) {
-  PATTERN_LIBRARY[id] = parsePatternJSON(def.notes, 256, { repeat: true });
+  const patternType = def.type || 'rudiment';
+  PATTERN_LIBRARY[id] = parsePatternJSON(def.notes, 256, { repeat: true, patternType });
+  // Store metadata for later use
+  PATTERN_LIBRARY[id]._type = patternType;
+  PATTERN_LIBRARY[id]._id = id;
 }
 
 // Get display name for a pattern ID
@@ -1106,7 +1269,12 @@ function getPatternName(id) {
   return PATTERN_DEFS[id]?.name || id;
 }
 
-const DEFAULT_PATTERN_KEY = 'single-paradiddle';
+// Get pattern type ('rudiment' or 'drumkit')
+function getPatternType(id) {
+  return PATTERN_DEFS[id]?.type || 'rudiment';
+}
+
+const DEFAULT_PATTERN_KEY = 'basic-rock';
 
 function setPattern(id, renderPatternOnly = true, preserveProgress = false) {
   const resolvedId = PATTERN_LIBRARY[id] ? id : DEFAULT_PATTERN_KEY;
@@ -1194,7 +1362,7 @@ function populatePatternMenu() {
     setPattern(id, true);
     if (window._matchBuffer && window._matchBuffer.length > 0) {
       const firstTime = window._matchBuffer[0].time;
-      const normalized = window._matchBuffer.map((m) => ({ time: m.time - firstTime, velocity: m.velocity, sticking: m.sticking }));
+      const normalized = window._matchBuffer.map((m) => ({ time: m.time - firstTime, velocity: m.velocity, sticking: m.sticking, inst: m.inst }));
       // Run search only against the selected pattern so the user choice is respected
       search(window._extendedPattern, normalized, 1, 1, { render: true, patternName: id });
     }
@@ -1404,12 +1572,359 @@ function stemAnchor(rx, ry, angleRad) {
   return { offsetX: Math.abs(X), offsetY: Y };
 }
 
+// ========== DRUMKIT NOTATION RENDERING ==========
+
+// Drum staff line positions (from top to bottom, in a 5-line staff)
+// Standard drum notation mapping
+const DRUM_STAFF = {
+  // Cymbals use X noteheads
+  'crash':      { line: -1, noteType: 'x' },     // Above staff
+  'ride':       { line: 0, noteType: 'x' },      // Top line
+  'hihat':      { line: 0, noteType: 'x' },      // Top line (same as ride)
+  'hihat-foot': { line: 4, noteType: 'x' },      // Below staff
+  // Drums use regular noteheads
+  'tom1':       { line: 1, noteType: 'oval' },   // First space
+  'snare':      { line: 2, noteType: 'oval' },   // Middle line
+  'tom2':       { line: 2.5, noteType: 'oval' }, // Between snare and floor tom
+  'tom3':       { line: 3, noteType: 'oval' },   // Fourth line (floor tom)
+  'kick':       { line: 4, noteType: 'oval' },   // Bottom space
+};
+
+// Render drumkit notation with full 5-line staff
+function renderDrumkitSVG(patternName, width = 1180, height = 200) {
+  const def = PATTERN_DEFS[patternName];
+  if (!def || !def.notes) return null;
+  
+  const durToSlots = (dur) => {
+    switch (dur) {
+      case 1: return 16;  // whole
+      case 2: return 8;   // half
+      case 4: return 4;   // quarter
+      case 8: return 2;   // eighth
+      case 12: return 4/3; // triplet eighth
+      case 16: default: return 1; // sixteenth
+    }
+  };
+  
+  // Parse notes into events with slot positions
+  let slotsPerCycle = 0;
+  let hitsPerCycle = 0;
+  
+  for (const n of def.notes) {
+    const dur = n.dur || 16;
+    slotsPerCycle += durToSlots(dur);
+    if (n.type !== 'rest') {
+      if (n.voices) {
+        hitsPerCycle += n.voices.length;
+      } else {
+        hitsPerCycle += 1;
+      }
+    }
+  }
+  
+  const beatsPerMeasure = def.time || 4;
+  const totalSlots = Math.max(beatsPerMeasure * 4, slotsPerCycle);
+  
+  // Parse into events
+  const events = [];
+  let slot = 0;
+  let patternHitIdx = 0;
+  
+  for (const n of def.notes) {
+    if (slot >= totalSlots) break;
+    
+    const dur = n.dur || 16;
+    const slots = durToSlots(dur);
+    
+    if (n.type === 'rest') {
+      slot += slots;
+      continue;
+    }
+    
+    // Handle multi-voice (simultaneous hits)
+    if (n.voices && Array.isArray(n.voices)) {
+      for (const v of n.voices) {
+        const inst = v.inst || 'S';
+        const instName = INST[inst] || 'snare';
+        const hand = v.hand || '';
+        const vel = v.vel || 'normal';
+        events.push({
+          slot,
+          inst: instName,
+          sticking: hand,
+          velocity: vel,
+          dur,
+          patternHitIdx: patternHitIdx++
+        });
+      }
+      slot += slots;
+      continue;
+    }
+    
+    // Single voice
+    const inst = n.inst || 'S';
+    const instName = INST[inst] || 'snare';
+    const hand = n.hand || '';
+    const vel = n.vel || 'normal';
+    events.push({
+      slot,
+      inst: instName,
+      sticking: hand,
+      velocity: vel,
+      dur,
+      patternHitIdx: patternHitIdx++
+    });
+    slot += slots;
+  }
+  
+  if (!events.length) return null;
+  
+  const svg = makeSvg(width, height);
+  
+  // Add defs for gradients
+  const defs = createSvgElement('defs');
+  const gradient = createSvgElement('linearGradient');
+  gradient.setAttribute('id', 'cursorGradient');
+  gradient.setAttribute('x1', '0%');
+  gradient.setAttribute('x2', '100%');
+  const stop1 = createSvgElement('stop');
+  stop1.setAttribute('offset', '0%');
+  stop1.setAttribute('stop-color', '#cc4444');
+  stop1.setAttribute('stop-opacity', '0');
+  const stop2 = createSvgElement('stop');
+  stop2.setAttribute('offset', '40%');
+  stop2.setAttribute('stop-color', '#cc4444');
+  stop2.setAttribute('stop-opacity', '0.4');
+  const stop3 = createSvgElement('stop');
+  stop3.setAttribute('offset', '50%');
+  stop3.setAttribute('stop-color', '#cc4444');
+  stop3.setAttribute('stop-opacity', '0.5');
+  const stop4 = createSvgElement('stop');
+  stop4.setAttribute('offset', '60%');
+  stop4.setAttribute('stop-color', '#cc4444');
+  stop4.setAttribute('stop-opacity', '0.4');
+  const stop5 = createSvgElement('stop');
+  stop5.setAttribute('offset', '100%');
+  stop5.setAttribute('stop-color', '#cc4444');
+  stop5.setAttribute('stop-opacity', '0');
+  gradient.appendChild(stop1);
+  gradient.appendChild(stop2);
+  gradient.appendChild(stop3);
+  gradient.appendChild(stop4);
+  gradient.appendChild(stop5);
+  defs.appendChild(gradient);
+  svg.appendChild(defs);
+  
+  // Cursor bar
+  const cursor = createSvgElement('rect');
+  cursor.setAttribute('id', 'notationCursor');
+  cursor.setAttribute('x', '0');
+  cursor.setAttribute('y', '0');
+  cursor.setAttribute('width', '40');
+  cursor.setAttribute('height', height);
+  cursor.setAttribute('fill', 'url(#cursorGradient)');
+  cursor.style.display = 'none';
+  svg.appendChild(cursor);
+  
+  const strokeColor = '#ffffff';
+  const marginL = 60;
+  const marginR = 40;
+  const staffWidth = width - marginL - marginR;
+  
+  // Staff dimensions
+  const lineSpacing = 12; // space between staff lines
+  const staffTop = 50; // top of the 5-line staff
+  const staffHeight = lineSpacing * 4; // 5 lines = 4 spaces
+  const staffCenter = staffTop + staffHeight / 2;
+  
+  // Draw 5-line staff
+  for (let i = 0; i < 5; i++) {
+    const y = staffTop + i * lineSpacing;
+    svg.appendChild(makeLine(marginL, y, marginL + staffWidth, y, 1.5, strokeColor));
+  }
+  
+  // Draw bar lines (just span the staff height)
+  const barLineTop = staffTop;
+  const barLineBottom = staffTop + staffHeight;
+  svg.appendChild(makeLine(marginL, barLineTop, marginL, barLineBottom, 3, strokeColor));
+  svg.appendChild(makeLine(marginL + staffWidth, barLineTop, marginL + staffWidth, barLineBottom, 3, strokeColor));
+  
+  // Draw drum clef (two vertical bars)
+  const clefX = marginL - 30;
+  const clefWidth = 8;
+  const clefGap = 6;
+  svg.appendChild(makeLine(clefX, staffTop, clefX, staffTop + staffHeight, 4, strokeColor));
+  svg.appendChild(makeLine(clefX + clefGap + 4, staffTop, clefX + clefGap + 4, staffTop + staffHeight, 4, strokeColor));
+  
+  // Note dimensions
+  const headRx = 7;
+  const headRy = 5;
+  const xHeadSize = 8;
+  const minStem = 30;
+  const beamY = staffTop - 20;
+  const beamThickness = 3;
+  
+  // Build maps
+  const hitMap = {};
+  const errorAnchorMap = {};
+  const noteInfoMap = {};
+  
+  // Note area
+  const visualGap = 30;
+  const notePadding = visualGap + headRx;
+  const noteAreaWidth = staffWidth - notePadding * 2;
+  const slotWidth = noteAreaWidth / (totalSlots - 1 || 1);
+  
+  // Group notes by slot for beaming and stemming
+  const notesBySlot = {};
+  for (const ev of events) {
+    if (!notesBySlot[ev.slot]) notesBySlot[ev.slot] = [];
+    notesBySlot[ev.slot].push(ev);
+  }
+  
+  // Track placed notes for beaming
+  const placed = [];
+  
+  for (const slotKey of Object.keys(notesBySlot).sort((a, b) => parseFloat(a) - parseFloat(b))) {
+    const slotNotes = notesBySlot[slotKey];
+    const slot = parseFloat(slotKey);
+    const x = marginL + notePadding + slot * slotWidth;
+    
+    // Find highest and lowest note for stem
+    let highestY = Infinity;
+    let lowestY = -Infinity;
+    
+    for (const ev of slotNotes) {
+      const staffInfo = DRUM_STAFF[ev.inst] || DRUM_STAFF['snare'];
+      const y = staffTop + staffInfo.line * lineSpacing;
+      
+      if (y < highestY) highestY = y;
+      if (y > lowestY) lowestY = y;
+      
+      // Draw notehead
+      if (staffInfo.noteType === 'x') {
+        // X notehead for cymbals
+        svg.appendChild(makeXNotehead(x, y, xHeadSize, strokeColor));
+      } else {
+        // Oval notehead for drums
+        svg.appendChild(makeNotehead(x, y, strokeColor, headRx, headRy, -0.3));
+      }
+      
+      // Draw accent if needed
+      if (ev.velocity === 'accent' || ev.velocity === ACCENT) {
+        svg.appendChild(makeAccentMark(x, y - 18, strokeColor));
+      }
+      
+      // Store maps
+      hitMap[ev.patternHitIdx] = x;
+      errorAnchorMap[ev.patternHitIdx] = ev.patternHitIdx;
+      noteInfoMap[ev.patternHitIdx] = {
+        isGrace: false,
+        graceOffset: 0,
+        sticking: ev.sticking,
+        x, y,
+        inst: ev.inst
+      };
+    }
+    
+    // Draw single stem for all notes at this slot
+    // Stem extends from the lowest note up to beam height
+    // For upward stems, the stem connects at the vertical center of the notehead
+    const stemX = x + headRx * 0.8;
+    const stemBottomY = lowestY;  // center of lowest note (stem connects here)
+    const stemTopY = beamY;       // up to beam height
+    svg.appendChild(makeLine(stemX, stemBottomY, stemX, stemTopY, 1.5, strokeColor));
+    
+    // Track for beaming
+    const dur = slotNotes[0].dur || 8;
+    placed.push({ x, stemX, stemEndY: beamY, dur, slot });
+    
+    // Draw sticking label below the staff if present
+    const handLabels = slotNotes.filter(n => n.sticking).map(n => n.sticking);
+    if (handLabels.length > 0) {
+      // Show unique stickings
+      const uniqueHands = [...new Set(handLabels)].join('/');
+      if (uniqueHands) {
+        const labelY = staffTop + staffHeight + 25;
+        const label = makeText(x, labelY, uniqueHands, '14px', 'middle', strokeColor);
+        svg.appendChild(label);
+      }
+    }
+  }
+  
+  // Store global state
+  window._notationHitMap = hitMap;
+  window._notationHitsPerCycle = patternHitIdx;
+  window._notationErrorAnchorMap = errorAnchorMap;
+  window._notationNoteInfoMap = noteInfoMap;
+  
+  // Draw beams for eighth notes and faster
+  if (placed.length > 1) {
+    // Group by beat (2 eighth notes per beat in 4/4)
+    const notesPerGroup = 2;
+    const beamGroups = [];
+    for (let i = 0; i < placed.length; i += notesPerGroup) {
+      const slice = placed.slice(i, i + notesPerGroup);
+      if (slice.length > 1) beamGroups.push(slice);
+    }
+    
+    beamGroups.forEach(group => {
+      const xStart = group[0].stemX;
+      const xEnd = group[group.length - 1].stemX;
+      
+      // Single beam for eighth notes
+      svg.appendChild(makeBeamRect(xStart, xEnd, beamY, beamThickness, strokeColor));
+      
+      // Add second beam for sixteenth notes if any
+      const has16ths = group.some(n => n.dur === 16);
+      if (has16ths) {
+        // Draw partial beams for consecutive 16ths
+        let i = 0;
+        while (i < group.length) {
+          if ((group[i].dur || 8) === 16) {
+            const runStart = i;
+            while (i < group.length && (group[i].dur || 8) === 16) i++;
+            const runEnd = i - 1;
+            if (runEnd >= runStart) {
+              const partialXStart = group[runStart].stemX;
+              const partialXEnd = group[runEnd].stemX;
+              svg.appendChild(makeBeamRect(partialXStart, partialXEnd, beamY + beamThickness + 3, beamThickness, strokeColor));
+            }
+          } else {
+            i++;
+          }
+        }
+      }
+    });
+  }
+  
+  return svg;
+}
+
+// Create X-shaped notehead for cymbals
+function makeXNotehead(cx, cy, size, color) {
+  const g = createSvgElement('g');
+  const half = size / 2;
+  const line1 = makeLine(cx - half, cy - half, cx + half, cy + half, 2.5, color);
+  const line2 = makeLine(cx - half, cy + half, cx + half, cy - half, 2.5, color);
+  g.appendChild(line1);
+  g.appendChild(line2);
+  return g;
+}
+
+// ========== END DRUMKIT NOTATION RENDERING ==========
+
 // Render notation SVG from the pattern notes (one cycle only).
 // Returns an SVG element.
 function renderNotationSVG(patternName, width = 1180, height = 120) {
   // Get pattern definition from PATTERN_DEFS (single source of truth)
   const def = PATTERN_DEFS[patternName];
   if (!def || !def.notes) return null;
+  
+  // Dispatch to drumkit renderer if pattern type is drumkit
+  if (def.type === 'drumkit') {
+    return renderDrumkitSVG(patternName, width, Math.max(height, 200));
+  }
   
   // Convert duration to slots (sixteenth note = 1 slot)
   // For triplets, we use fractional slots that sum to the beat
@@ -2018,7 +2533,9 @@ function computeTimingErrors(pattern, match, latestPatternIdx) {
         isAccent: noteInfo.isAccent,
         isGhost: noteInfo.isGhost,
         missedAccent,
-        missedGhost
+        missedGhost,
+        matchInst: m.inst || 'S', // instrument from played note
+        patternInst: noteInfo.inst || 'S' // instrument from pattern
       });
       patternMatched[bestPatIdx] = true;
     }
@@ -2033,7 +2550,7 @@ function computeTimingErrors(pattern, match, latestPatternIdx) {
   
   // Process assignments to find errors
   for (const assignment of matchAssignments) {
-    const { notationIdx, originalPatternIdx, timingError, alreadyMatched, matchSticking, patternSticking, stickingMismatch, isGrace, graceOffset, missedAccent, missedGhost } = assignment;
+    const { notationIdx, originalPatternIdx, timingError, alreadyMatched, matchSticking, patternSticking, stickingMismatch, isGrace, graceOffset, missedAccent, missedGhost, matchInst, patternInst } = assignment;
     
     // Only update errors for the current note (where the cursor is)
     // Past notes keep their errors - no retroactive changes
@@ -2076,7 +2593,8 @@ function computeTimingErrors(pattern, match, latestPatternIdx) {
           patternSticking,
           isGrace,
           graceOffset,
-          stickingMismatch
+          stickingMismatch,
+          inst: matchInst // instrument played
         });
       } else {
         // Dragging (late) - this is the primary error, includes sticking info
@@ -2087,7 +2605,8 @@ function computeTimingErrors(pattern, match, latestPatternIdx) {
           patternSticking,
           isGrace,
           graceOffset,
-          stickingMismatch
+          stickingMismatch,
+          inst: matchInst // instrument played
         });
       }
     } else if (stickingMismatch) {
@@ -2098,7 +2617,8 @@ function computeTimingErrors(pattern, match, latestPatternIdx) {
         sticking: displaySticking,
         patternSticking,
         isGrace,
-        graceOffset
+        graceOffset,
+        inst: matchInst // instrument played
       });
     } else if (alreadyMatched) {
       // Extra hit on same beat (double-matched) - only if no other error
@@ -2108,7 +2628,8 @@ function computeTimingErrors(pattern, match, latestPatternIdx) {
         sticking: displaySticking,
         patternSticking,
         isGrace,
-        graceOffset
+        graceOffset,
+        inst: matchInst // instrument played
       });
     }
   }
@@ -2142,7 +2663,8 @@ function computeTimingErrors(pattern, match, latestPatternIdx) {
             sticking: patSticking,
             patternSticking: patSticking,
             isGrace: noteInfo.isGrace,
-            graceOffset: noteInfo.graceOffset
+            graceOffset: noteInfo.graceOffset,
+            inst: noteInfo.inst || 'S' // instrument from pattern
           });
         }
       }
@@ -2165,22 +2687,35 @@ function renderTimingErrors() {
   const existing = svg.querySelectorAll('.timing-error');
   existing.forEach(el => el.remove());
   
-  // Get notation dimensions from the staff line
-  const staffLine = svg.querySelector('line');
-  if (!staffLine) return;
+  // Check if we're rendering a drumkit pattern
+  const currentPatternId = window._currentPatternName;
+  const isDrumkit = currentPatternId && getPatternType(currentPatternId) === 'drumkit';
   
-  const centerY = parseFloat(staffLine.getAttribute('y1'));
+  // Get staff dimensions from the first staff line
+  const staffLines = svg.querySelectorAll('line');
+  if (!staffLines.length) return;
+  
+  // For drumkit: use 5-line staff layout
+  // For rudiment: use single line
+  const staffTop = parseFloat(staffLines[0].getAttribute('y1'));
+  const lineSpacing = isDrumkit && staffLines.length >= 5 
+    ? parseFloat(staffLines[1].getAttribute('y1')) - staffTop 
+    : 12;
+  
+  // For single-line patterns, centerY is the staff line
+  const centerY = isDrumkit ? staffTop : staffTop;
   const lineThickness = 2;
   
   // Note dimensions (matching notation rendering)
-  const headRx = 8;
-  const headRy = 5.5;
+  const headRx = isDrumkit ? 7 : 8;
+  const headRy = isDrumkit ? 5 : 5.5;
+  const xHeadSize = 8;  // for cymbal X noteheads
   const graceRx = 5;
   const graceRy = 3.5;
-  const angleRad = -25 * Math.PI / 180;
-  const minStem = 42;
+  const angleRad = isDrumkit ? -0.3 : -25 * Math.PI / 180;
+  const minStem = isDrumkit ? 30 : 42;
   const graceStemLen = 20;
-  const beamY = centerY - 54; // top of beams (matching notation)
+  const beamY = isDrumkit ? staffTop - 20 : centerY - 54;
   const anchor = stemAnchor(headRx, headRy, angleRad);
   const graceAnchor = stemAnchor(graceRx, graceRy, angleRad);
   
@@ -2212,6 +2747,7 @@ function renderTimingErrors() {
       const graceOffset = error.graceOffset || 0;
       const isMiss = error.type === 'miss';
       const isStickingError = error.type === 'sticking';
+      const inst = error.inst || 'S';
       
       // Use appropriate dimensions for grace vs main notes
       const rx = isGrace ? graceRx : headRx;
@@ -2221,32 +2757,60 @@ function renderTimingErrors() {
       // Apply grace offset to x position
       const x = baseX + offsetX + graceOffset;
       
-      // Y position based on sticking: R below line, L above line
-      const y = sticking === 'R' 
-        ? centerY + ry + lineThickness / 2 + 2
-        : centerY - ry - lineThickness / 2 - 2;
+      // Y position depends on pattern type
+      let y;
+      let useXNotehead = false;
+      
+      if (isDrumkit) {
+        // For drumkit patterns, position based on instrument
+        const staffInfo = DRUM_STAFF[INST[inst]] || DRUM_STAFF['snare'];
+        y = staffTop + staffInfo.line * lineSpacing;
+        useXNotehead = staffInfo.noteType === 'x';
+      } else {
+        // For single-line rudiment patterns, position based on sticking
+        y = sticking === 'R' 
+          ? centerY + ry + lineThickness / 2 + 2
+          : centerY - ry - lineThickness / 2 - 2;
+      }
       
       // Create a group for the error note
       const g = createSvgElement('g');
       g.setAttribute('class', 'timing-error');
       
-      // Draw notehead (hollow for misses, filled for other errors)
-      const head = createSvgElement('ellipse');
-      head.setAttribute('cx', x);
-      head.setAttribute('cy', y);
-      head.setAttribute('rx', rx);
-      head.setAttribute('ry', ry);
-      if (isMiss) {
-        // Hollow notehead for misses
-        head.setAttribute('fill', 'none');
-        head.setAttribute('stroke', errorColor);
-        head.setAttribute('stroke-width', '2');
+      // Draw notehead (use X for cymbals, ellipse for drums)
+      if (useXNotehead) {
+        // X notehead for cymbals (hi-hat, ride, crash)
+        const half = xHeadSize / 2;
+        const line1 = makeLine(x - half, y - half, x + half, y + half, 2.5, errorColor);
+        const line2 = makeLine(x - half, y + half, x + half, y - half, 2.5, errorColor);
+        if (isMiss) {
+          // For missed cymbal notes, make the X dashed/lighter
+          line1.setAttribute('stroke-dasharray', '3,2');
+          line2.setAttribute('stroke-dasharray', '3,2');
+          line1.setAttribute('stroke-opacity', '0.7');
+          line2.setAttribute('stroke-opacity', '0.7');
+        }
+        g.appendChild(line1);
+        g.appendChild(line2);
       } else {
-        // Filled notehead for other errors
-        head.setAttribute('fill', errorColor);
+        // Oval notehead for drums
+        const head = createSvgElement('ellipse');
+        head.setAttribute('cx', x);
+        head.setAttribute('cy', y);
+        head.setAttribute('rx', rx);
+        head.setAttribute('ry', ry);
+        if (isMiss) {
+          // Hollow notehead for misses
+          head.setAttribute('fill', 'none');
+          head.setAttribute('stroke', errorColor);
+          head.setAttribute('stroke-width', '2');
+        } else {
+          // Filled notehead for other errors
+          head.setAttribute('fill', errorColor);
+        }
+        head.setAttribute('transform', `rotate(${(isDrumkit ? -0.3 : angleRad) * 180 / Math.PI} ${x} ${y})`);
+        g.appendChild(head);
       }
-      head.setAttribute('transform', `rotate(${angleRad * 180 / Math.PI} ${x} ${y})`);
-      g.appendChild(head);
       
       // Draw stem (skip for sticking errors - just show notehead on wrong side)
       if (!isStickingError) {
