@@ -758,7 +758,7 @@ function toNumericVelocity(v) {
 // ========== JSON PATTERN DSL ==========
 // Each pattern is an array of note objects:
 // {
-//   type: 'note' | 'double' | 'flam' | 'drag' | 'rest',
+//   type: 'single' | 'double' | 'flam' | 'drag' | 'rest',
 //   hand: 'R' | 'L',           // sticking (for note/double/flam/drag main note)
 //   dur: 16 | 8 | 4 | 2 | 1,   // duration: 16=sixteenth, 8=eighth, 4=quarter, 2=half, 1=whole
 //   vel: 'accent' | 'normal' | 'ghost'  // velocity/dynamics (optional, default 'normal')
@@ -782,64 +782,135 @@ function toNumericVelocity(v) {
 const R = 'R', L = 'L';
 const ACCENT = 'accent', GHOST = 'ghost', NORMAL = 'normal';
 
-// Instrument codes for drumkit patterns
+// Instrument codes for drumkit patterns - full names for clarity
 const INST = {
-  S: 'snare',
-  K: 'kick',
-  H: 'hihat',
-  R: 'ride',
-  C: 'crash',
-  T1: 'tom1',   // high tom
-  T2: 'tom2',   // mid tom
-  T3: 'tom3',   // floor tom
-  HF: 'hihat-foot'  // hi-hat pedal
+  snare: 'snare',
+  kick: 'kick',
+  hihat: 'hihat',
+  ride: 'ride',
+  crash: 'crash',
+  tom1: 'tom1',   // high tom
+  tom2: 'tom2',   // mid tom
+  tom3: 'tom3',   // floor tom
+  'hihat-foot': 'hihat-foot'  // hi-hat pedal
 };
 
-// Shorthand instrument constants
-const S = 'S', K = 'K', H = 'H', HF = 'HF';
-const RIDE = 'R', CRASH = 'C';  // RIDE to avoid conflict with R='R' for right hand
-const T1 = 'T1', T2 = 'T2', T3 = 'T3';
+// Shorthand instrument constants for pattern definitions
+const snare = 'snare', kick = 'kick', hihat = 'hihat';
+const ride = 'ride', crash = 'crash';
+const tom1 = 'tom1', tom2 = 'tom2', tom3 = 'tom3';
+const hihatFoot = 'hihat-foot';
 
 // General MIDI drum note to instrument mapping
 // Based on GM1 Sound Set standard
 const MIDI_DRUM_MAP = {
   // Kick drums
-  35: 'K', // Acoustic Bass Drum
-  36: 'K', // Bass Drum 1
+  35: 'kick', // Acoustic Bass Drum
+  36: 'kick', // Bass Drum 1
   // Snare drums
-  38: 'S', // Acoustic Snare
-  40: 'S', // Electric Snare
-  37: 'S', // Side Stick
+  38: 'snare', // Acoustic Snare
+  40: 'snare', // Electric Snare
+  37: 'snare', // Side Stick
   // Hi-hat
-  42: 'H', // Closed Hi-Hat
-  44: 'HF', // Pedal Hi-Hat (foot)
-  46: 'H', // Open Hi-Hat
+  42: 'hihat', // Closed Hi-Hat
+  44: 'hihat-foot', // Pedal Hi-Hat (foot)
+  46: 'hihat', // Open Hi-Hat
   // Toms
-  50: 'T1', // High Tom
-  48: 'T1', // Hi-Mid Tom
-  47: 'T2', // Low-Mid Tom
-  45: 'T2', // Low Tom
-  43: 'T3', // High Floor Tom
-  41: 'T3', // Low Floor Tom
+  50: 'tom1', // High Tom
+  48: 'tom1', // Hi-Mid Tom
+  47: 'tom2', // Low-Mid Tom
+  45: 'tom2', // Low Tom
+  43: 'tom3', // High Floor Tom
+  41: 'tom3', // Low Floor Tom
   // Cymbals
-  49: 'C', // Crash Cymbal 1
-  57: 'C', // Crash Cymbal 2
-  51: 'R', // Ride Cymbal 1
-  59: 'R', // Ride Cymbal 2
-  53: 'R', // Ride Bell
-  52: 'C', // Chinese Cymbal
-  55: 'C', // Splash Cymbal
+  49: 'crash', // Crash Cymbal 1
+  57: 'crash', // Crash Cymbal 2
+  51: 'ride', // Ride Cymbal 1
+  59: 'ride', // Ride Cymbal 2
+  53: 'ride', // Ride Bell
+  52: 'crash', // Chinese Cymbal
+  55: 'crash', // Splash Cymbal
   // Extended snare (Roland pads)
-  23: 'S', // Snare Brush
-  19: 'S', // Snare Head (wires off)
-  18: 'S', // Snare Rim (wires off)
-  16: 'S', // Snare Brush (wires off)
-  17: 'S', // Snare XStick (wires off)
+  23: 'snare', // Snare Brush
+  19: 'snare', // Snare Head (wires off)
+  18: 'snare', // Snare Rim (wires off)
+  16: 'snare', // Snare Brush (wires off)
+  17: 'snare', // Snare XStick (wires off)
 };
 
 // Get instrument code from MIDI note number
 function instrumentFromMidiNote(note) {
-  return MIDI_DRUM_MAP[note] || 'S'; // default to snare if unknown
+  return MIDI_DRUM_MAP[note] || 'snare'; // default to snare if unknown
+}
+
+// Parse drumkit pattern with separate voices per instrument
+// Each voice has its own timeline with correct note durations
+// Returns array of { time, velocity, sticking, inst }
+function parseDrumkitVoices(voices, beatMs = 256, opts = {}) {
+  const { repeat = false } = opts;
+  const events = [];
+  let maxTime = 0;
+  let hitCount = 0;
+
+  // Convert duration to ms (beatMs = one sixteenth note)
+  const durToMs = (dur) => {
+    switch (dur) {
+      case 1: return beatMs * 16;  // whole
+      case 2: return beatMs * 8;   // half
+      case 4: return beatMs * 4;   // quarter
+      case 8: return beatMs * 2;   // eighth
+      case 12: return beatMs * 4 / 3; // triplet eighth
+      case 16: default: return beatMs; // sixteenth
+    }
+  };
+
+  // Process each voice (instrument track) independently
+  for (const [inst, notes] of Object.entries(voices)) {
+    let t = 0;
+    for (const n of notes) {
+      const type = n.type || 'single';
+      const dur = n.dur || 16;
+      const vel = n.vel || 'normal';
+      const hand = n.hand || '';
+      const durMs = durToMs(dur);
+
+      if (type === 'rest') {
+        t += durMs;
+        continue;
+      }
+
+      if (type === 'single') {
+        events.push({ time: t, velocity: vel, sticking: hand, inst, dur });
+        t += durMs;
+        hitCount++;
+        continue;
+      }
+    }
+    if (t > maxTime) maxTime = t;
+  }
+
+  // Sort events by time
+  events.sort((a, b) => a.time - b.time);
+
+  if (!repeat || events.length === 0 || maxTime <= 0) return events;
+
+  // Repeat pattern to cover match buffer
+  const minHits = MAX_MATCH_BEATS * 2;
+  const repeats = Math.max(2, Math.ceil(minHits / hitCount));
+  const extended = [];
+  for (let r = 0; r < repeats; r++) {
+    const offset = r * maxTime;
+    for (const e of events) {
+      extended.push({ 
+        time: e.time + offset, 
+        velocity: e.velocity, 
+        sticking: e.sticking, 
+        inst: e.inst,
+        dur: e.dur
+      });
+    }
+  }
+  return extended;
 }
 
 // Parse JSON pattern definition into timed events
@@ -866,7 +937,7 @@ function parsePatternJSON(notes, beatMs = 256, opts = {}) {
   };
 
   for (const n of notes) {
-    const type = n.type || 'note';
+    const type = n.type || 'single';
     const hand = n.hand || 'R';
     const dur = n.dur || 16;
     const vel = n.vel || 'normal';
@@ -893,7 +964,7 @@ function parsePatternJSON(notes, beatMs = 256, opts = {}) {
       continue;
     }
 
-    if (type === 'note') {
+    if (type === 'single') {
       const event = { time: t, velocity: vel, sticking: hand };
       if (isDrumkit) event.inst = inst;
       events.push(event);
@@ -1015,8 +1086,8 @@ const PATTERN_DEFS = {
   "single-stroke-roll": {
     name: "Single Stroke Roll",
     notes: [
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
+      { type: 'single', hand: R, dur: 16 },
+      { type: 'single', hand: L, dur: 16 },
     ]
   },
   "double-stroke-roll": {
@@ -1032,7 +1103,7 @@ const PATTERN_DEFS = {
     notes: [
       { type: 'double', hand: R, dur: 16 },
       { type: 'double', hand: L, dur: 16 },
-      { type: 'note', hand: R, dur: 8, vel: ACCENT },
+      { type: 'single', hand: R, dur: 8, vel: ACCENT },
     ]
   },
   "five-stroke-roll-l": {
@@ -1041,7 +1112,7 @@ const PATTERN_DEFS = {
     notes: [
       { type: 'double', hand: L, dur: 16 },
       { type: 'double', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 8, vel: ACCENT },
+      { type: 'single', hand: L, dur: 8, vel: ACCENT },
     ]
   },
   "five-stroke-roll-alt": {
@@ -1050,23 +1121,23 @@ const PATTERN_DEFS = {
     notes: [
       { type: 'double', hand: R, dur: 16 },
       { type: 'double', hand: L, dur: 16 },
-      { type: 'note', hand: R, dur: 8, vel: ACCENT },
+      { type: 'single', hand: R, dur: 8, vel: ACCENT },
       { type: 'double', hand: L, dur: 16 },
       { type: 'double', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 8, vel: ACCENT },
+      { type: 'single', hand: L, dur: 8, vel: ACCENT },
     ]
   },
   "single-paradiddle": {
     name: "Single Paradiddle",
     notes: [
-      { type: 'note', hand: R, dur: 16, vel: ACCENT },
-      { type: 'note', hand: L, dur: 16 },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16, vel: ACCENT },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
+      { type: 'single', hand: R, dur: 16, vel: ACCENT },
+      { type: 'single', hand: L, dur: 16 },
+      { type: 'single', hand: R, dur: 16 },
+      { type: 'single', hand: R, dur: 16 },
+      { type: 'single', hand: L, dur: 16, vel: ACCENT },
+      { type: 'single', hand: R, dur: 16 },
+      { type: 'single', hand: L, dur: 16 },
+      { type: 'single', hand: L, dur: 16 },
     ]
   },
   "double-paradiddle": {
@@ -1074,40 +1145,40 @@ const PATTERN_DEFS = {
     time: 3,
     beamGroup: 6,
     notes: [
-      { type: 'note', hand: R, dur: 16, vel: ACCENT },
-      { type: 'note', hand: L, dur: 16 },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16, vel: ACCENT },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
+      { type: 'single', hand: R, dur: 16, vel: ACCENT },
+      { type: 'single', hand: L, dur: 16 },
+      { type: 'single', hand: R, dur: 16 },
+      { type: 'single', hand: L, dur: 16 },
+      { type: 'single', hand: R, dur: 16 },
+      { type: 'single', hand: R, dur: 16 },
+      { type: 'single', hand: L, dur: 16, vel: ACCENT },
+      { type: 'single', hand: R, dur: 16 },
+      { type: 'single', hand: L, dur: 16 },
+      { type: 'single', hand: R, dur: 16 },
+      { type: 'single', hand: L, dur: 16 },
+      { type: 'single', hand: L, dur: 16 },
     ]
   },
   "triple-paradiddle": {
     name: "Triple Paradiddle",
     beamGroup: 8,
     notes: [
-      { type: 'note', hand: R, dur: 16, vel: ACCENT },
-      { type: 'note', hand: L, dur: 16 },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16, vel: ACCENT },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
-      { type: 'note', hand: R, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
-      { type: 'note', hand: L, dur: 16 },
+      { type: 'single', hand: R, dur: 16, vel: ACCENT },
+      { type: 'single', hand: L, dur: 16 },
+      { type: 'single', hand: R, dur: 16 },
+      { type: 'single', hand: L, dur: 16 },
+      { type: 'single', hand: R, dur: 16 },
+      { type: 'single', hand: L, dur: 16 },
+      { type: 'single', hand: R, dur: 16 },
+      { type: 'single', hand: R, dur: 16 },
+      { type: 'single', hand: L, dur: 16, vel: ACCENT },
+      { type: 'single', hand: R, dur: 16 },
+      { type: 'single', hand: L, dur: 16 },
+      { type: 'single', hand: R, dur: 16 },
+      { type: 'single', hand: L, dur: 16 },
+      { type: 'single', hand: R, dur: 16 },
+      { type: 'single', hand: L, dur: 16 },
+      { type: 'single', hand: L, dur: 16 },
     ]
   },
   "flam-r": {
@@ -1133,11 +1204,11 @@ const PATTERN_DEFS = {
     name: "Flam Accent",
     notes: [
       { type: 'flam', hand: R, dur: 12, vel: ACCENT },
-      { type: 'note', hand: L, dur: 12 },
-      { type: 'note', hand: R, dur: 12 },
+      { type: 'single', hand: L, dur: 12 },
+      { type: 'single', hand: R, dur: 12 },
       { type: 'flam', hand: L, dur: 12, vel: ACCENT },
-      { type: 'note', hand: R, dur: 12 },
-      { type: 'note', hand: L, dur: 12 },
+      { type: 'single', hand: R, dur: 12 },
+      { type: 'single', hand: L, dur: 12 },
     ]
   },
   "drag-r": {
@@ -1163,64 +1234,64 @@ const PATTERN_DEFS = {
     name: "Flam Tap (Right)",
     notes: [
       { type: 'flam', hand: R, dur: 8, vel: ACCENT },
-      { type: 'note', hand: L, dur: 8 },
+      { type: 'single', hand: L, dur: 8 },
     ]
   },
   "flam-tap-l": {
     name: "Flam Tap (Left)",
     notes: [
       { type: 'flam', hand: L, dur: 8, vel: ACCENT },
-      { type: 'note', hand: R, dur: 8 },
+      { type: 'single', hand: R, dur: 8 },
     ]
   },
   "flam-tap-alt": {
     name: "Flam Tap (Alternating)",
     notes: [
       { type: 'flam', hand: R, dur: 8, vel: ACCENT },
-      { type: 'note', hand: L, dur: 8 },
+      { type: 'single', hand: L, dur: 8 },
       { type: 'flam', hand: L, dur: 8, vel: ACCENT },
-      { type: 'note', hand: R, dur: 8 },
+      { type: 'single', hand: R, dur: 8 },
     ]
   },
   "dut-triplets": {
     name: "Down-Up-Tap Triplets",
     notes: [
-      { type: 'note', hand: R, dur: 12, vel: ACCENT, label: 'D' },
-      { type: 'note', hand: L, dur: 12, label: 'U' },
-      { type: 'note', hand: R, dur: 12, label: 'T' },
+      { type: 'single', hand: R, dur: 12, vel: ACCENT, label: 'D' },
+      { type: 'single', hand: L, dur: 12, label: 'U' },
+      { type: 'single', hand: R, dur: 12, label: 'T' },
     ]
   },
   "btd-triplets-r": {
     name: "Bounce-Tap-Down Triplets (Right)",
     notes: [
-      { type: 'note', hand: R, dur: 12, vel: ACCENT, label: 'B' },
-      { type: 'note', hand: L, dur: 12, label: 'T' },
-      { type: 'note', hand: R, dur: 12, vel: ACCENT, label: 'D' },
-      { type: 'note', hand: L, dur: 12, label: 'T' },
-      { type: 'note', hand: R, dur: 12, label: 'U' },
-      { type: 'note', hand: L, dur: 12, label: 'T' },
+      { type: 'single', hand: R, dur: 12, vel: ACCENT, label: 'B' },
+      { type: 'single', hand: L, dur: 12, label: 'T' },
+      { type: 'single', hand: R, dur: 12, vel: ACCENT, label: 'D' },
+      { type: 'single', hand: L, dur: 12, label: 'T' },
+      { type: 'single', hand: R, dur: 12, label: 'U' },
+      { type: 'single', hand: L, dur: 12, label: 'T' },
     ]
   },
   "btd-triplets-l": {
     name: "Bounce-Tap-Down Triplets (Left)",
     notes: [
-      { type: 'note', hand: L, dur: 12, vel: ACCENT, label: 'B' },
-      { type: 'note', hand: R, dur: 12, label: 'T' },
-      { type: 'note', hand: L, dur: 12, vel: ACCENT, label: 'D' },
-      { type: 'note', hand: R, dur: 12, label: 'T' },
-      { type: 'note', hand: L, dur: 12, label: 'U' },
-      { type: 'note', hand: R, dur: 12, label: 'T' },
+      { type: 'single', hand: L, dur: 12, vel: ACCENT, label: 'B' },
+      { type: 'single', hand: R, dur: 12, label: 'T' },
+      { type: 'single', hand: L, dur: 12, vel: ACCENT, label: 'D' },
+      { type: 'single', hand: R, dur: 12, label: 'T' },
+      { type: 'single', hand: L, dur: 12, label: 'U' },
+      { type: 'single', hand: R, dur: 12, label: 'T' },
     ]
   },
   "triplet-double-1": {
     name: "Triplet Double Stroke 1",
     beamGroup: 3,
     notes: [
-      { type: 'note', hand: R, dur: 12 },
-      { type: 'note', hand: L, dur: 12 },
+      { type: 'single', hand: R, dur: 12 },
+      { type: 'single', hand: L, dur: 12 },
       { type: 'double', hand: R, dur: 12 },
-      { type: 'note', hand: L, dur: 12 },
-      { type: 'note', hand: R, dur: 12 },
+      { type: 'single', hand: L, dur: 12 },
+      { type: 'single', hand: R, dur: 12 },
       { type: 'double', hand: L, dur: 12 },
     ]
   },
@@ -1228,10 +1299,10 @@ const PATTERN_DEFS = {
     name: "Triplet Double Stroke 2",
     beamGroup: 3,
     notes: [
-      { type: 'note', hand: R, dur: 12 },
+      { type: 'single', hand: R, dur: 12 },
       { type: 'double', hand: L, dur: 12 },
       { type: 'double', hand: R, dur: 12 },
-      { type: 'note', hand: L, dur: 12 },
+      { type: 'single', hand: L, dur: 12 },
       { type: 'double', hand: R, dur: 12 },
       { type: 'double', hand: L, dur: 12 },
     ]
@@ -1240,17 +1311,31 @@ const PATTERN_DEFS = {
   "basic-rock": {
     name: "Basic Rock Beat",
     type: 'drumkit',
-    notes: [
-      // Bar 1: standard rock pattern
-      { dur: 8, voices: [{ inst: K }, { inst: H }] },           // 1 - kick + hi-hat
-      { dur: 8, inst: H },                                       // & - hi-hat
-      { dur: 8, voices: [{ inst: S }, { inst: H }] },  // 2 - snare + hi-hat
-      { dur: 8, inst: H },                                       // & - hi-hat
-      { dur: 8, voices: [{ inst: K }, { inst: H }] },           // 3 - kick + hi-hat
-      { dur: 8, inst: H },                                       // & - hi-hat
-      { dur: 8, voices: [{ inst: S }, { inst: H }] },  // 4 - snare + hi-hat
-      { dur: 8, inst: H },                                       // & - hi-hat
-    ]
+    time: 4, // 4/4 time signature
+    voices: {
+      hihat: [  // Hi-hat: eighth notes throughout
+        { type: 'single', dur: 8 },
+        { type: 'single', dur: 8 },
+        { type: 'single', dur: 8 },
+        { type: 'single', dur: 8 },
+        { type: 'single', dur: 8 },
+        { type: 'single', dur: 8 },
+        { type: 'single', dur: 8 },
+        { type: 'single', dur: 8 },
+      ],
+      snare: [  // Snare: quarter notes on beats 2 and 4
+        { type: 'rest', dur: 4 },
+        { type: 'single', dur: 4 },
+        { type: 'rest', dur: 4 },
+        { type: 'single', dur: 4 },
+      ],
+      kick: [  // Kick: quarter notes on beats 1 and 3
+        { type: 'single', dur: 4 },
+        { type: 'rest', dur: 4 },
+        { type: 'single', dur: 4 },
+        { type: 'rest', dur: 4 },
+      ]
+    }
   },
 };
 
@@ -1258,7 +1343,14 @@ const PATTERN_DEFS = {
 const PATTERN_LIBRARY = {};
 for (const [id, def] of Object.entries(PATTERN_DEFS)) {
   const patternType = def.type || 'rudiment';
-  PATTERN_LIBRARY[id] = parsePatternJSON(def.notes, 256, { repeat: true, patternType });
+  
+  // Use voices-based parsing for drumkit, notes-based for rudiments
+  if (patternType === 'drumkit' && def.voices) {
+    PATTERN_LIBRARY[id] = parseDrumkitVoices(def.voices, 256, { repeat: true });
+  } else {
+    PATTERN_LIBRARY[id] = parsePatternJSON(def.notes, 256, { repeat: true, patternType });
+  }
+  
   // Store metadata for later use
   PATTERN_LIBRARY[id]._type = patternType;
   PATTERN_LIBRARY[id]._id = id;
@@ -1418,7 +1510,7 @@ function makeSvg(width, height) {
   return svg;
 }
 
-function makeLine(x1, y1, x2, y2, strokeWidth, color) {
+function makeLine(x1, y1, x2, y2, strokeWidth, color, linecap = 'round') {
   const line = createSvgElement("line");
   line.setAttribute("x1", x1);
   line.setAttribute("y1", y1);
@@ -1426,7 +1518,7 @@ function makeLine(x1, y1, x2, y2, strokeWidth, color) {
   line.setAttribute("y2", y2);
   line.setAttribute("stroke", color);
   line.setAttribute("stroke-width", strokeWidth);
-  line.setAttribute("stroke-linecap", "round");
+  line.setAttribute("stroke-linecap", linecap);
   return line;
 }
 
@@ -1572,28 +1664,86 @@ function stemAnchor(rx, ry, angleRad) {
   return { offsetX: Math.abs(X), offsetY: Y };
 }
 
+// ========== SHARED NOTE RENDERING ==========
+// Standard note dimensions used across all renderers
+// Match rudiments: headRx=8, headRy=5.5 for consistent stem positioning
+const NOTE_CONFIG = {
+  headRx: 8,
+  headRy: 5.5,
+  xHeadSize: 10,  // slightly larger X for better visual balance with oval noteheads
+  angleRad: -25 * Math.PI / 180,  // standard rotation for oval noteheads
+  stemWidth: 1.5
+};
+
+// Pre-calculate stem anchor for standard note size
+// Apply 0.85 factor to keep stems aligned with notehead edge
+const NOTE_ANCHOR = stemAnchor(NOTE_CONFIG.headRx, NOTE_CONFIG.headRy, NOTE_CONFIG.angleRad);
+const STEM_OFFSET_X = NOTE_ANCHOR.offsetX * 0.85;  // adjusted stem X position
+
+// Draw a notehead (oval or X) and return the stem attachment point
+// Returns { stemX, stemTopY } for where to connect the stem
+function drawNotehead(svg, x, y, isXHead, color, isMiss = false, container = null) {
+  const { headRx, headRy, xHeadSize, angleRad } = NOTE_CONFIG;
+  const xHeadHalf = xHeadSize / 2;
+  const target = container || svg;
+  
+  if (isXHead) {
+    // X notehead for cymbals (hi-hat, ride, crash)
+    const half = xHeadHalf;
+    const line1 = makeLine(x - half, y - half, x + half, y + half, 2.5, color);
+    const line2 = makeLine(x - half, y + half, x + half, y - half, 2.5, color);
+    if (isMiss) {
+      line1.setAttribute('stroke-dasharray', '3,2');
+      line2.setAttribute('stroke-dasharray', '3,2');
+      line1.setAttribute('stroke-opacity', '0.7');
+      line2.setAttribute('stroke-opacity', '0.7');
+    }
+    target.appendChild(line1);
+    target.appendChild(line2);
+    // Stem connects at top-right corner of X
+    return { stemX: x + xHeadHalf, stemTopY: y - xHeadHalf };
+  } else {
+    // Oval notehead
+    const head = makeNotehead(x, y, isMiss ? 'none' : color, headRx, headRy, angleRad);
+    if (isMiss) {
+      head.setAttribute('stroke', color);
+      head.setAttribute('stroke-width', '2');
+    }
+    target.appendChild(head);
+    // Stem connects at right edge of rotated ellipse (with 0.9 factor)
+    return { stemX: x + STEM_OFFSET_X, stemTopY: y + NOTE_ANCHOR.offsetY };
+  }
+}
+
+// Draw a stem from bottom to top
+function drawStem(svg, stemX, bottomY, topY, color, container = null) {
+  const target = container || svg;
+  target.appendChild(makeLine(stemX, bottomY, stemX, topY, NOTE_CONFIG.stemWidth, color));
+}
+
 // ========== DRUMKIT NOTATION RENDERING ==========
 
 // Drum staff line positions (from top to bottom, in a 5-line staff)
-// Standard drum notation mapping
+// Lines are 0-4 (top to bottom), spaces between lines are 0.5, 1.5, 2.5, 3.5
+// Standard drum notation mapping - notes sit in SPACES (between lines)
 const DRUM_STAFF = {
   // Cymbals use X noteheads
-  'crash':      { line: -1, noteType: 'x' },     // Above staff
-  'ride':       { line: 0, noteType: 'x' },      // Top line
-  'hihat':      { line: 0, noteType: 'x' },      // Top line (same as ride)
-  'hihat-foot': { line: 4, noteType: 'x' },      // Below staff
+  'crash':      { line: -1, noteType: 'x' },     // Above staff (ledger line area)
+  'ride':       { line: -0.5, noteType: 'x' },   // Space above top line
+  'hihat':      { line: -0.5, noteType: 'x' },   // Space above top line (same as ride)
+  'hihat-foot': { line: 4.5, noteType: 'x' },    // Below bottom line
   // Drums use regular noteheads
-  'tom1':       { line: 1, noteType: 'oval' },   // First space
-  'snare':      { line: 2, noteType: 'oval' },   // Middle line
-  'tom2':       { line: 2.5, noteType: 'oval' }, // Between snare and floor tom
+  'tom1':       { line: 0.5, noteType: 'oval' }, // First space (below top line)
+  'snare':      { line: 1.5, noteType: 'oval' }, // Second space (C space)
+  'tom2':       { line: 2.5, noteType: 'oval' }, // Third space
   'tom3':       { line: 3, noteType: 'oval' },   // Fourth line (floor tom)
-  'kick':       { line: 4, noteType: 'oval' },   // Bottom space
+  'kick':       { line: 3.5, noteType: 'oval' }, // Bottom space (between lines 3-4)
 };
 
 // Render drumkit notation with full 5-line staff
 function renderDrumkitSVG(patternName, width = 1180, height = 200) {
   const def = PATTERN_DEFS[patternName];
-  if (!def || !def.notes) return null;
+  if (!def) return null;
   
   const durToSlots = (dur) => {
     switch (dur) {
@@ -1606,76 +1756,87 @@ function renderDrumkitSVG(patternName, width = 1180, height = 200) {
     }
   };
   
-  // Parse notes into events with slot positions
-  let slotsPerCycle = 0;
-  let hitsPerCycle = 0;
-  
-  for (const n of def.notes) {
-    const dur = n.dur || 16;
-    slotsPerCycle += durToSlots(dur);
-    if (n.type !== 'rest') {
-      if (n.voices) {
-        hitsPerCycle += n.voices.length;
-      } else {
-        hitsPerCycle += 1;
-      }
-    }
-  }
-  
-  const beatsPerMeasure = def.time || 4;
-  const totalSlots = Math.max(beatsPerMeasure * 4, slotsPerCycle);
-  
-  // Parse into events
+  // Parse voices into events with slot positions
   const events = [];
-  let slot = 0;
   let patternHitIdx = 0;
+  let maxSlots = 0;
   
-  for (const n of def.notes) {
-    if (slot >= totalSlots) break;
-    
-    const dur = n.dur || 16;
-    const slots = durToSlots(dur);
-    
-    if (n.type === 'rest') {
-      slot += slots;
-      continue;
+  if (def.voices) {
+    // New voice-based format: each instrument has its own timeline
+    for (const [inst, notes] of Object.entries(def.voices)) {
+      let slot = 0;
+      for (const n of notes) {
+        const type = n.type || 'single';
+        const dur = n.dur || 16;
+        const slots = durToSlots(dur);
+        
+        if (type === 'rest') {
+          slot += slots;
+          continue;
+        }
+        
+        if (type === 'single') {
+          events.push({
+            slot,
+            inst,
+            sticking: n.hand || '',
+            velocity: n.vel || 'normal',
+            dur,
+            patternHitIdx: patternHitIdx++
+          });
+          slot += slots;
+        }
+      }
+      if (slot > maxSlots) maxSlots = slot;
     }
-    
-    // Handle multi-voice (simultaneous hits)
-    if (n.voices && Array.isArray(n.voices)) {
-      for (const v of n.voices) {
-        const inst = v.inst || 'S';
-        const instName = INST[inst] || 'snare';
-        const hand = v.hand || '';
-        const vel = v.vel || 'normal';
+  } else if (def.notes) {
+    // Legacy notes-based format
+    let slot = 0;
+    for (const n of def.notes) {
+      const dur = n.dur || 16;
+      const slots = durToSlots(dur);
+      
+      if (n.type === 'rest') {
+        slot += slots;
+        continue;
+      }
+      
+      if (n.voices && Array.isArray(n.voices)) {
+        for (const v of n.voices) {
+          events.push({
+            slot,
+            inst: v.inst || 'snare',
+            sticking: v.hand || '',
+            velocity: v.vel || 'normal',
+            dur,
+            patternHitIdx: patternHitIdx++
+          });
+        }
+      } else {
         events.push({
           slot,
-          inst: instName,
-          sticking: hand,
-          velocity: vel,
+          inst: n.inst || 'snare',
+          sticking: n.hand || '',
+          velocity: n.vel || 'normal',
           dur,
           patternHitIdx: patternHitIdx++
         });
       }
       slot += slots;
-      continue;
     }
-    
-    // Single voice
-    const inst = n.inst || 'S';
-    const instName = INST[inst] || 'snare';
-    const hand = n.hand || '';
-    const vel = n.vel || 'normal';
-    events.push({
-      slot,
-      inst: instName,
-      sticking: hand,
-      velocity: vel,
-      dur,
-      patternHitIdx: patternHitIdx++
-    });
-    slot += slots;
+    maxSlots = slot;
+  } else {
+    return null;
   }
+  
+  // Sort events by slot then by instrument (consistent ordering)
+  events.sort((a, b) => a.slot - b.slot || a.inst.localeCompare(b.inst));
+  
+  // Re-number pattern hit indices after sorting
+  events.forEach((e, i) => e.patternHitIdx = i);
+  
+  const beatsPerMeasure = def.time || 4;
+  const totalSlots = Math.max(beatsPerMeasure * 4, maxSlots);
   
   if (!events.length) return null;
   
@@ -1733,7 +1894,7 @@ function renderDrumkitSVG(patternName, width = 1180, height = 200) {
   
   // Staff dimensions
   const lineSpacing = 12; // space between staff lines
-  const staffTop = 50; // top of the 5-line staff
+  const staffTop = 80; // top of the 5-line staff (leave room for stems/beams above)
   const staffHeight = lineSpacing * 4; // 5 lines = 4 spaces
   const staffCenter = staffTop + staffHeight / 2;
   
@@ -1743,11 +1904,11 @@ function renderDrumkitSVG(patternName, width = 1180, height = 200) {
     svg.appendChild(makeLine(marginL, y, marginL + staffWidth, y, 1.5, strokeColor));
   }
   
-  // Draw bar lines (just span the staff height)
-  const barLineTop = staffTop;
-  const barLineBottom = staffTop + staffHeight;
-  svg.appendChild(makeLine(marginL, barLineTop, marginL, barLineBottom, 3, strokeColor));
-  svg.appendChild(makeLine(marginL + staffWidth, barLineTop, marginL + staffWidth, barLineBottom, 3, strokeColor));
+  // Draw bar lines with rounded caps (shorten slightly so round caps don't extend past staff)
+  const barLineTop = staffTop + 1;
+  const barLineBottom = staffTop + staffHeight - 1;
+  svg.appendChild(makeLine(marginL, barLineTop, marginL, barLineBottom, 3, strokeColor, 'round'));
+  svg.appendChild(makeLine(marginL + staffWidth, barLineTop, marginL + staffWidth, barLineBottom, 3, strokeColor, 'round'));
   
   // Draw drum clef (two vertical bars)
   const clefX = marginL - 30;
@@ -1756,13 +1917,13 @@ function renderDrumkitSVG(patternName, width = 1180, height = 200) {
   svg.appendChild(makeLine(clefX, staffTop, clefX, staffTop + staffHeight, 4, strokeColor));
   svg.appendChild(makeLine(clefX + clefGap + 4, staffTop, clefX + clefGap + 4, staffTop + staffHeight, 4, strokeColor));
   
-  // Note dimensions
-  const headRx = 7;
-  const headRy = 5;
-  const xHeadSize = 8;
-  const minStem = 30;
-  const beamY = staffTop - 20;
+  // Note dimensions - use shared config for consistency with rudiments
+  const { headRx, headRy, xHeadSize, angleRad } = NOTE_CONFIG;
+  const xHeadHalf = xHeadSize / 2;
+  const minStem = 40; // stem length
+  const beamY = staffTop - 50; // above staff but within canvas (staffTop=80, so beamY=30)
   const beamThickness = 3;
+  const anchor = stemAnchor(headRx, headRy, angleRad); // stem attachment point for oval noteheads
   
   // Build maps
   const hitMap = {};
@@ -1790,25 +1951,29 @@ function renderDrumkitSVG(patternName, width = 1180, height = 200) {
     const slot = parseFloat(slotKey);
     const x = marginL + notePadding + slot * slotWidth;
     
-    // Find highest and lowest note for stem
+    // First pass: find highest and lowest notes for stem positioning
     let highestY = Infinity;
     let lowestY = -Infinity;
+    let highestIsX = false;
     
     for (const ev of slotNotes) {
       const staffInfo = DRUM_STAFF[ev.inst] || DRUM_STAFF['snare'];
       const y = staffTop + staffInfo.line * lineSpacing;
-      
-      if (y < highestY) highestY = y;
-      if (y > lowestY) lowestY = y;
-      
-      // Draw notehead
-      if (staffInfo.noteType === 'x') {
-        // X notehead for cymbals
-        svg.appendChild(makeXNotehead(x, y, xHeadSize, strokeColor));
-      } else {
-        // Oval notehead for drums
-        svg.appendChild(makeNotehead(x, y, strokeColor, headRx, headRy, -0.3));
+      if (y < highestY) {
+        highestY = y;
+        highestIsX = staffInfo.noteType === 'x';
       }
+      if (y > lowestY) lowestY = y;
+    }
+    
+    // Second pass: draw noteheads and store data
+    for (const ev of slotNotes) {
+      const staffInfo = DRUM_STAFF[ev.inst] || DRUM_STAFF['snare'];
+      const y = staffTop + staffInfo.line * lineSpacing;
+      const isXHead = staffInfo.noteType === 'x';
+      
+      // Draw notehead using shared function
+      drawNotehead(svg, x, y, isXHead, strokeColor);
       
       // Draw accent if needed
       if (ev.velocity === 'accent' || ev.velocity === ACCENT) {
@@ -1827,13 +1992,17 @@ function renderDrumkitSVG(patternName, width = 1180, height = 200) {
       };
     }
     
-    // Draw single stem for all notes at this slot
-    // Stem extends from the lowest note up to beam height
-    // For upward stems, the stem connects at the vertical center of the notehead
-    const stemX = x + headRx * 0.8;
-    const stemBottomY = lowestY;  // center of lowest note (stem connects here)
-    const stemTopY = beamY;       // up to beam height
-    svg.appendChild(makeLine(stemX, stemBottomY, stemX, stemTopY, 1.5, strokeColor));
+    // Draw stem - always use STEM_OFFSET_X for consistent alignment with oval noteheads
+    const xHeadHalf = NOTE_CONFIG.xHeadSize / 2;  // = 4
+    const stemX = x + STEM_OFFSET_X;  // same position as rudiments use for oval noteheads
+    
+    // Stem Y: from lowest note to beam
+    // Special case: if ONLY note is an X notehead (hi-hat alone), start stem at top of X
+    const onlyOneNote = (highestY === lowestY);
+    const stemBottomY = (onlyOneNote && highestIsX) ? (highestY - xHeadHalf) : lowestY;
+    
+    // Stem goes from bottom to beam
+    drawStem(svg, stemX, stemBottomY, beamY, strokeColor);
     
     // Track for beaming
     const dur = slotNotes[0].dur || 8;
@@ -1860,8 +2029,8 @@ function renderDrumkitSVG(patternName, width = 1180, height = 200) {
   
   // Draw beams for eighth notes and faster
   if (placed.length > 1) {
-    // Group by beat (2 eighth notes per beat in 4/4)
-    const notesPerGroup = 2;
+    // Group by beat (4 eighth notes per half-bar in 4/4 for standard notation)
+    const notesPerGroup = 4;
     const beamGroups = [];
     for (let i = 0; i < placed.length; i += notesPerGroup) {
       const slice = placed.slice(i, i + notesPerGroup);
@@ -1919,12 +2088,15 @@ function makeXNotehead(cx, cy, size, color) {
 function renderNotationSVG(patternName, width = 1180, height = 120) {
   // Get pattern definition from PATTERN_DEFS (single source of truth)
   const def = PATTERN_DEFS[patternName];
-  if (!def || !def.notes) return null;
+  if (!def) return null;
   
   // Dispatch to drumkit renderer if pattern type is drumkit
   if (def.type === 'drumkit') {
     return renderDrumkitSVG(patternName, width, Math.max(height, 200));
   }
+  
+  // For rudiments, require notes array
+  if (!def.notes) return null;
   
   // Convert duration to slots (sixteenth note = 1 slot)
   // For triplets, we use fractional slots that sum to the beat
@@ -1954,7 +2126,7 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
   let hasTriplets = false;
   
   for (const n of def.notes) {
-    const type = n.type || 'note';
+    const type = n.type || 'single';
     const dur = n.dur || 16;
     const vel = n.vel || 'normal';
     slotsPerCycle += durToSlots(dur);
@@ -1965,7 +2137,7 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
       notesPerCycle++;
       if (vel === ACCENT || vel === 'accent') accentsPerCycle++;
       // Count hits per pattern type
-      if (type === 'note') hitsPerCycle += 1;
+      if (type === 'single') hitsPerCycle += 1;
       else if (type === 'double') hitsPerCycle += 2;
       else if (type === 'flam') hitsPerCycle += 2;
       else if (type === 'drag') hitsPerCycle += 3;
@@ -1991,7 +2163,7 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
       // Stop if we've filled all slots
       if (slot >= totalSlots) break;
       
-      const type = n.type || 'note';
+      const type = n.type || 'single';
       const hand = n.hand || 'R';
       const dur = n.dur || 16;
       const vel = n.vel || 'normal';
@@ -2006,7 +2178,7 @@ function renderNotationSVG(patternName, width = 1180, height = 120) {
         continue;
       }
       
-      if (type === 'note') {
+      if (type === 'single') {
         const isAccent = vel === ACCENT || vel === 'accent';
         const hitIdx = patternHitIdx++;
         events.push({ 
@@ -2706,16 +2878,14 @@ function renderTimingErrors() {
   const centerY = isDrumkit ? staffTop : staffTop;
   const lineThickness = 2;
   
-  // Note dimensions (matching notation rendering)
-  const headRx = isDrumkit ? 7 : 8;
-  const headRy = isDrumkit ? 5 : 5.5;
-  const xHeadSize = 8;  // for cymbal X noteheads
+  // Note dimensions - use shared config for consistency
+  // (drawNotehead uses NOTE_CONFIG internally)
+  const { headRx, headRy, xHeadSize, angleRad } = NOTE_CONFIG;
   const graceRx = 5;
   const graceRy = 3.5;
-  const angleRad = isDrumkit ? -0.3 : -25 * Math.PI / 180;
-  const minStem = isDrumkit ? 30 : 42;
+  const minStem = isDrumkit ? 40 : 42; // match notation rendering
   const graceStemLen = 20;
-  const beamY = isDrumkit ? staffTop - 20 : centerY - 54;
+  const beamY = isDrumkit ? staffTop - 50 : centerY - 54; // match notation rendering
   const anchor = stemAnchor(headRx, headRy, angleRad);
   const graceAnchor = stemAnchor(graceRx, graceRy, angleRad);
   
@@ -2763,7 +2933,8 @@ function renderTimingErrors() {
       
       if (isDrumkit) {
         // For drumkit patterns, position based on instrument
-        const staffInfo = DRUM_STAFF[INST[inst]] || DRUM_STAFF['snare'];
+        // inst is now the full name (e.g., 'snare', 'kick', 'hihat')
+        const staffInfo = DRUM_STAFF[inst] || DRUM_STAFF['snare'];
         y = staffTop + staffInfo.line * lineSpacing;
         useXNotehead = staffInfo.noteType === 'x';
       } else {
@@ -2777,62 +2948,21 @@ function renderTimingErrors() {
       const g = createSvgElement('g');
       g.setAttribute('class', 'timing-error');
       
-      // Draw notehead (use X for cymbals, ellipse for drums)
-      if (useXNotehead) {
-        // X notehead for cymbals (hi-hat, ride, crash)
-        const half = xHeadSize / 2;
-        const line1 = makeLine(x - half, y - half, x + half, y + half, 2.5, errorColor);
-        const line2 = makeLine(x - half, y + half, x + half, y - half, 2.5, errorColor);
-        if (isMiss) {
-          // For missed cymbal notes, make the X dashed/lighter
-          line1.setAttribute('stroke-dasharray', '3,2');
-          line2.setAttribute('stroke-dasharray', '3,2');
-          line1.setAttribute('stroke-opacity', '0.7');
-          line2.setAttribute('stroke-opacity', '0.7');
-        }
-        g.appendChild(line1);
-        g.appendChild(line2);
-      } else {
-        // Oval notehead for drums
-        const head = createSvgElement('ellipse');
-        head.setAttribute('cx', x);
-        head.setAttribute('cy', y);
-        head.setAttribute('rx', rx);
-        head.setAttribute('ry', ry);
-        if (isMiss) {
-          // Hollow notehead for misses
-          head.setAttribute('fill', 'none');
-          head.setAttribute('stroke', errorColor);
-          head.setAttribute('stroke-width', '2');
-        } else {
-          // Filled notehead for other errors
-          head.setAttribute('fill', errorColor);
-        }
-        head.setAttribute('transform', `rotate(${(isDrumkit ? -0.3 : angleRad) * 180 / Math.PI} ${x} ${y})`);
-        g.appendChild(head);
-      }
+      // Draw notehead and get stem position using shared function
+      const noteResult = drawNotehead(svg, x, y, useXNotehead, errorColor, isMiss, g);
       
       // Draw stem (skip for sticking errors - just show notehead on wrong side)
+      // Error notes use short fixed stems since they're not connected to beams
       if (!isStickingError) {
-        const stemX = x + anch.offsetX * 0.9;
-        const stemStartY = y + anch.offsetY;
-        const stemLen = isGrace ? graceStemLen : Math.max(minStem, stemStartY - beamY + 1);
-        const stem = createSvgElement('line');
-        stem.setAttribute('x1', stemX);
-        stem.setAttribute('y1', stemStartY);
-        stem.setAttribute('x2', stemX);
-        stem.setAttribute('y2', stemStartY - stemLen);
-        stem.setAttribute('stroke', errorColor);
-        stem.setAttribute('stroke-width', '2');
-        stem.setAttribute('stroke-linecap', 'round');
-        g.appendChild(stem);
+        const errorStemLen = 25; // short fixed length for error notes
+        const stemLen = isGrace ? graceStemLen : errorStemLen;
+        const stemTopY = y - stemLen;
+        drawStem(svg, noteResult.stemX, y, stemTopY, errorColor, g);
         
         // Draw flag on grace note errors (like flam grace notes)
         if (isGrace) {
-          // Simple flag shape
-          const flagStartY = stemStartY - stemLen;
           const flag = createSvgElement('path');
-          const flagPath = `M ${stemX} ${flagStartY} q 6 8, 4 16`;
+          const flagPath = `M ${noteResult.stemX} ${stemTopY} q 6 8, 4 16`;
           flag.setAttribute('d', flagPath);
           flag.setAttribute('fill', 'none');
           flag.setAttribute('stroke', errorColor);
