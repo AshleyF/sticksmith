@@ -367,7 +367,7 @@ window.addEventListener('keydown', (evt) => {
     addMatchNoteAt(now, 64, '', 'S');
   // Hi-hat
   } else if (key === 'u') {
-    addMatchNoteAt(now, 64, 'R', 'H');
+    addMatchNoteAt(now, 64, '', 'H');
   // Kick
   } else if (key === ' ') {
     addMatchNoteAt(now, 64, '', 'K');
@@ -589,47 +589,195 @@ diddle4 = [
   {"time":812.5,"velocity":33.904458598726116,"sticking":""}]
 
 function score(pattern, match, velocityWeight, stickingWeight) {
+  // Check if this is a drumkit pattern (has instrument info)
+  const patternHasInstruments = pattern.some(p => p.inst);
+  const matchHasInstruments = match.some(m => m.inst);
+  
+  // Use per-instrument scoring for drumkit patterns
+  if (patternHasInstruments && matchHasInstruments) {
+    return scorePerInstrument(pattern, match, velocityWeight, stickingWeight);
+  }
+  
+  // Original scoring for rudiments (no instrument info)
+  return scoreRudiment(pattern, match, velocityWeight, stickingWeight);
+}
+
+// Score a single instrument's notes against pattern notes for that instrument
+// Returns { timing, dynamics, matched, total, reuseCount, gapCount }
+function scoreSingleInstrument(patternNotes, matchNotes, velocityWeight) {
   function square(x) { return x * x; }
-  var dynamics = 0; // velocity matching
-  var timing = 0; // timing + penalties
+  
+  if (!patternNotes.length || !matchNotes.length) {
+    return { timing: 0, dynamics: 0, matched: 0, total: patternNotes.length, reuseCount: 0, gapCount: 0 };
+  }
+  
+  let timing = 0;
+  let dynamics = 0;
+  let reuseCount = 0;
+  const alreadyMatched = new Array(patternNotes.length).fill(false);
+  
+  // For each played note, find the closest pattern note
+  for (const m of matchNotes) {
+    let bestDist = Number.MAX_VALUE;
+    let bestIdx = -1;
+    let bestTimeTerm = 0;
+    let bestVelTerm = 0;
+    
+    for (let j = 0; j < patternNotes.length; j++) {
+      const p = patternNotes[j];
+      const timeDiff = square(p.time - m.time);
+      if (timeDiff < bestDist) {
+        bestDist = timeDiff;
+        bestIdx = j;
+        bestTimeTerm = timeDiff;
+        bestVelTerm = square(toNumericVelocity(p.velocity) - m.velocity) * velocityWeight;
+      }
+    }
+    
+    if (bestIdx >= 0) {
+      if (alreadyMatched[bestIdx]) {
+        reuseCount++;
+      } else {
+        alreadyMatched[bestIdx] = true;
+      }
+      timing += bestTimeTerm;
+      dynamics += bestVelTerm;
+    }
+  }
+  
+  // Count gaps (pattern notes in matched range that weren't hit)
+  let firstMatched = -1, lastMatched = -1;
+  for (let i = 0; i < alreadyMatched.length; i++) {
+    if (alreadyMatched[i]) {
+      if (firstMatched === -1) firstMatched = i;
+      lastMatched = i;
+    }
+  }
+  
+  let gapCount = 0;
+  if (firstMatched >= 0 && lastMatched > firstMatched) {
+    for (let i = firstMatched; i <= lastMatched; i++) {
+      if (!alreadyMatched[i]) gapCount++;
+    }
+  }
+  
+  const matched = alreadyMatched.filter(Boolean).length;
+  
+  return {
+    timing: matchNotes.length > 0 ? Math.sqrt(timing / matchNotes.length) : 0,
+    dynamics: matchNotes.length > 0 ? Math.sqrt(dynamics / matchNotes.length) : 0,
+    matched,
+    total: patternNotes.length,
+    reuseCount,
+    gapCount
+  };
+}
+
+// Per-instrument scoring for drumkit patterns
+// Scores each instrument independently, then combines
+function scorePerInstrument(pattern, match, velocityWeight, stickingWeight) {
+  const end = match[match.length - 1].time;
+  const recentCutoff = end - SCORE_DECAY_MS;
+  const recentMatch = match.filter(m => m.time >= recentCutoff);
+  
+  if (!recentMatch.length) {
+    return { dynamics: Number.MAX_VALUE, timing: Number.MAX_VALUE, reuseCount: 0, gapCount: 0, stickingCount: 0 };
+  }
+  
+  // Group pattern notes by instrument
+  const patternByInst = {};
+  for (const p of pattern) {
+    const inst = p.inst || 'snare';
+    if (!patternByInst[inst]) patternByInst[inst] = [];
+    patternByInst[inst].push(p);
+  }
+  
+  // Group match notes by instrument
+  const matchByInst = {};
+  for (const m of recentMatch) {
+    const inst = m.inst || 'snare';
+    if (!matchByInst[inst]) matchByInst[inst] = [];
+    matchByInst[inst].push(m);
+  }
+  
+  // Get instruments that are being played
+  const playedInstruments = Object.keys(matchByInst);
+  
+  // If none of the played instruments are in the pattern, no match
+  const relevantInstruments = playedInstruments.filter(inst => patternByInst[inst]);
+  if (!relevantInstruments.length) {
+    return { dynamics: Number.MAX_VALUE, timing: Number.MAX_VALUE, reuseCount: 0, gapCount: 0, stickingCount: 0 };
+  }
+  
+  // Score each instrument independently
+  let totalTiming = 0;
+  let totalDynamics = 0;
+  let totalReuseCount = 0;
+  let totalGapCount = 0;
+  let totalNotes = 0;
+  
+  for (const inst of relevantInstruments) {
+    const patNotes = patternByInst[inst] || [];
+    const matNotes = matchByInst[inst] || [];
+    
+    if (patNotes.length === 0) continue;
+    
+    const instScore = scoreSingleInstrument(patNotes, matNotes, velocityWeight);
+    
+    // Weight by number of notes in this instrument's pattern
+    const weight = patNotes.length;
+    totalTiming += instScore.timing * weight;
+    totalDynamics += instScore.dynamics * weight;
+    totalReuseCount += instScore.reuseCount;
+    totalGapCount += instScore.gapCount;
+    totalNotes += weight;
+  }
+  
+  if (totalNotes === 0) {
+    return { dynamics: Number.MAX_VALUE, timing: Number.MAX_VALUE, reuseCount: 0, gapCount: 0, stickingCount: 0 };
+  }
+  
+  const avgTiming = totalTiming / totalNotes;
+  const avgDynamics = totalDynamics / totalNotes;
+  
+  // Apply penalties for extra hits and missed notes
+  if (totalReuseCount > 0 || totalGapCount > 0) {
+    const penalty = DISQUALIFIED_SCORE + (totalReuseCount + totalGapCount) * 1e10;
+    return {
+      dynamics: avgDynamics,
+      timing: avgTiming + penalty,
+      reuseCount: totalReuseCount,
+      gapCount: totalGapCount,
+      stickingCount: 0
+    };
+  }
+  
+  return {
+    dynamics: avgDynamics,
+    timing: avgTiming,
+    reuseCount: totalReuseCount,
+    gapCount: totalGapCount,
+    stickingCount: 0
+  };
+}
+
+// Original rudiment scoring (no instruments)
+function scoreRudiment(pattern, match, velocityWeight, stickingWeight) {
+  function square(x) { return x * x; }
+  var dynamics = 0;
+  var timing = 0;
   var reuseCount = 0;
   var gapCount = 0;
   var stickingCount = 0;
   var c = 0;
   var alreadyMatched = [];
-  var start = pattern[0].time; // pattern start
+  var start = pattern[0].time;
   var end = match[match.length - 1].time;
   
-  // Get the set of instruments being played (from match buffer)
-  // This allows partial matching - e.g. only kick matches kick pattern notes
-  const matchInstruments = new Set();
-  for (const m of match) {
-    if (m.inst) matchInstruments.add(m.inst);
-  }
-  // If no instrument info, default to matching all
-  const filterByInstrument = matchInstruments.size > 0;
-  
-  // Filter pattern to only include notes for instruments being played
-  // This allows practicing just the kick, just the snare, etc.
-  const filteredPattern = filterByInstrument 
-    ? pattern.filter(p => !p.inst || matchInstruments.has(p.inst))
-    : pattern;
-  
-  // If filtered pattern is empty, can't match
-  if (!filteredPattern.length) {
-    return { dynamics: Number.MAX_VALUE, timing: Number.MAX_VALUE, reuseCount: 0, gapCount: 0, stickingCount: 0 };
-  }
-  
-  // Also filter match to only include matching instruments (for drumkit patterns)
-  const filteredMatch = filterByInstrument
-    ? match.filter(m => !m.inst || matchInstruments.has(m.inst))
-    : match;
-  // Discard match notes older than the decay window relative to the last note
   var recentCutoff = end - SCORE_DECAY_MS;
-  var filtered = filteredMatch.filter((m) => m.time >= recentCutoff);
-    if (!filtered.length) return { dynamics: Number.MAX_VALUE, timing: Number.MAX_VALUE, reuseCount: reuseCount, gapCount: gapCount, stickingCount: stickingCount };
-  // Use filtered pattern for scoring
-  const scoringPattern = filteredPattern;
+  var filtered = match.filter((m) => m.time >= recentCutoff);
+  if (!filtered.length) return { dynamics: Number.MAX_VALUE, timing: Number.MAX_VALUE, reuseCount: 0, gapCount: 0, stickingCount: 0 };
+  
   for (var i = 0; i < filtered.length; i++) {
     var m = filtered[i];
     if (end - m.time > NOTE_AGE_CUTOFF_MS) {
@@ -641,10 +789,8 @@ function score(pattern, match, velocityWeight, stickingWeight) {
     var velTerm = 0;
     var stickPenalty = 0;
     var bestStickMismatch = 0;
-    for (var j = 0; j < scoringPattern.length; j++) {
-      var pp = scoringPattern[j];
-      // Check instrument match (skip if instrument doesn't match)
-      if (filterByInstrument && m.inst && pp.inst && m.inst !== pp.inst) continue;
+    for (var j = 0; j < pattern.length; j++) {
+      var pp = pattern[j];
       var dd = square(pp.time - m.time);
       if (dd < d) {
         const stickingMismatch = (m.sticking === '' || pp.sticking == m.sticking) ? 0 : 1;
@@ -657,25 +803,22 @@ function score(pattern, match, velocityWeight, stickingWeight) {
       }
     }
     if (pj >= 0 && alreadyMatched[pj]) {
-      // Track reuse of the same pattern beat (extra hits)
       reuseCount++;
     }
     if (pj >= 0) {
       alreadyMatched[pj] = true;
       stickingCount += bestStickMismatch;
     }
-    // Weight by exponential growth: notes closer to pattern start have near-zero weight,
-    // notes toward the end have higher weight. Uses (1 - exp(-t)) to approach 1 asymptotically
     var timeFromStart = m.time - start;
-    var weight = 1 - Math.exp(-timeFromStart / SCORE_DECAY_MS); // approaches 1 as time increases
+    var weight = 1 - Math.exp(-timeFromStart / SCORE_DECAY_MS);
     timing += (timeTerm + stickPenalty) * weight;
     dynamics += velTerm * weight;
     c++;
   }
-  // Penalize gaps: pattern beats between the first and last matched beat that remain unmatched
+  
   var firstIdx = -1;
   var lastIdx = -1;
-  for (var k = 0; k < scoringPattern.length; k++) {
+  for (var k = 0; k < pattern.length; k++) {
     if (alreadyMatched[k]) {
       if (firstIdx === -1) firstIdx = k;
       lastIdx = k;
@@ -687,18 +830,16 @@ function score(pattern, match, velocityWeight, stickingWeight) {
       if (!alreadyMatched[k2]) gapUnmatched++;
     }
     if (gapUnmatched > 0) {
-      // Track unmatched beats within the matched window (misses)
       gapCount += gapUnmatched;
     }
   }
-  if (c === 0) return { dynamics: Number.MAX_VALUE, timing: Number.MAX_VALUE, reuseCount: reuseCount, gapCount: gapCount, stickingCount: stickingCount };
+  if (c === 0) return { dynamics: Number.MAX_VALUE, timing: Number.MAX_VALUE, reuseCount: 0, gapCount: 0, stickingCount: 0 };
 
   var norm = c;
   var baseDynamics = Math.sqrt(dynamics / norm);
   var baseTiming = Math.sqrt(timing / norm);
 
   if (reuseCount > 0 || gapCount > 0) {
-    // Drastically inflate timing so penalized candidates sort last
     const penalty = DISQUALIFIED_SCORE + (reuseCount + gapCount) * 1e10;
     return {
       dynamics: baseDynamics,
@@ -725,7 +866,8 @@ function scaleTime(pattern, factor) { // assumes 0 origin time
     scaled.push({
       time: p.time * factor,
       velocity: p.velocity,
-      sticking: p.sticking
+      sticking: p.sticking,
+      inst: p.inst  // preserve instrument for drumkit patterns
     });
   }
   return scaled;
@@ -740,7 +882,8 @@ function scaleVelocity(pattern, factor, vmin = 32, vmax = 127) {
     scaled.push({
       time: p.time,
       velocity: v,
-      sticking: p.sticking
+      sticking: p.sticking,
+      inst: p.inst  // preserve instrument for drumkit patterns
     });
   }
   return scaled;
@@ -1074,7 +1217,8 @@ const PATTERN_GROUPS = {
     "triplet-double-2",
   ],
   "Drumkit": [
-    "basic-rock",
+    "money-beat",
+    "we-will-rock-you",
   ],
 };
 
@@ -1308,8 +1452,8 @@ const PATTERN_DEFS = {
     ]
   },
   // ========== DRUMKIT PATTERNS ==========
-  "basic-rock": {
-    name: "Basic Rock Beat",
+  "money-beat": {
+    name: "Money Beat",
     type: 'drumkit',
     time: 4, // 4/4 time signature
     voices: {
@@ -1333,6 +1477,37 @@ const PATTERN_DEFS = {
         { type: 'single', dur: 4 },
         { type: 'rest', dur: 4 },
         { type: 'single', dur: 4 },
+        { type: 'rest', dur: 4 },
+      ]
+    }
+  },
+  "we-will-rock-you": {
+    name: "We Will Rock You Beat",
+    type: 'drumkit',
+    time: 4, // 4/4 time signature
+    voices: {
+      hihat: [  // Hi-hat: eighth notes throughout
+        { type: 'single', dur: 8 },
+        { type: 'single', dur: 8 },
+        { type: 'single', dur: 8 },
+        { type: 'single', dur: 8 },
+        { type: 'single', dur: 8 },
+        { type: 'single', dur: 8 },
+        { type: 'single', dur: 8 },
+        { type: 'single', dur: 8 },
+      ],
+      snare: [  // Snare: quarter notes on beats 2 and 4
+        { type: 'rest', dur: 4 },
+        { type: 'single', dur: 4 },
+        { type: 'rest', dur: 4 },
+        { type: 'single', dur: 4 },
+      ],
+      kick: [  // Kick: eighth notes on beats 1/1a and 3/2a
+        { type: 'single', dur: 8 },
+        { type: 'single', dur: 8 },
+        { type: 'rest', dur: 4 },
+        { type: 'single', dur: 8 },
+        { type: 'single', dur: 8 },
         { type: 'rest', dur: 4 },
       ]
     }
@@ -1366,7 +1541,7 @@ function getPatternType(id) {
   return PATTERN_DEFS[id]?.type || 'rudiment';
 }
 
-const DEFAULT_PATTERN_KEY = 'basic-rock';
+const DEFAULT_PATTERN_KEY = 'money-beat';
 
 function setPattern(id, renderPatternOnly = true, preserveProgress = false) {
   const resolvedId = PATTERN_LIBRARY[id] ? id : DEFAULT_PATTERN_KEY;
@@ -1489,7 +1664,8 @@ function translateTime(pattern, offset) {
     translated.push({
       time: p.time + offset,
       velocity: p.velocity,
-      sticking: p.sticking
+      sticking: p.sticking,
+      inst: p.inst  // preserve instrument for drumkit patterns
     });
   }
   return translated;
@@ -3111,69 +3287,132 @@ function renderPatternMatch(pattern, match, scale, translate) {
   const usableWidth = Math.max(1, W - leftPad - rightPad);
   const mapX = (t) => leftPad + ((t - minTime) / timeRange) * usableWidth;
 
-  // Layout vertically into two bands (pattern top, match bottom), reserving space for metric bars.
-  const metricsAreaHeight = 120; // space for dynamics/timing/sticking/feel bars
-  const available = H - padding * 2 - metricsAreaHeight;
-  const bandHeight = available / 2;
-  const patternBaseline = padding + bandHeight - 2; // bottom of top band
-  // Reserve a small label area under the match band so labels can be drawn
-  // below the match bars without overlapping the canvas edge.
-  const labelHeight = 12; // px (approx for 11px font)
-  const labelMargin = 2; // px gap between bar and label
-  const matchBaseline = padding + available - labelHeight; // lifted so labels fit below
+  // Check if we have multiple instruments (drumkit pattern)
+  const patternInstruments = [...new Set(pattern.filter(p => p.inst).map(p => p.inst))];
+  const matchInstruments = [...new Set((match || []).filter(m => m.inst).map(m => m.inst))];
+  const allInstruments = [...new Set([...patternInstruments, ...matchInstruments])];
+  const isMultiInstrument = allInstruments.length > 1;
 
-  // velocity -> bar height using fixed MIDI scale (0..127), not relative to observed max
-  const velToHeight = (v) => {
+  // Layout vertically - reserve space for metric bars
+  const metricsAreaHeight = 120;
+  const available = H - padding * 2 - metricsAreaHeight;
+  
+  // velocity -> bar height using fixed MIDI scale (0..127)
+  const velToHeight = (v, maxH) => {
     const norm = Math.max(0, Math.min(127, toNumericVelocity(v))) / 127;
-    return norm * (bandHeight * 0.7); // smaller bars to fit in reduced height
+    return norm * (maxH * 0.7);
   };
 
-  // Draw pattern bars (background) on the top band
-  ctx.textAlign = 'center';
-  ctx.font = '11px sans-serif';
   const highlightIdx = (typeof window._lastMatchedPatternIdx === 'number') ? window._lastMatchedPatternIdx : -1;
-  // Render all sticking labels across the extended pattern
-  for (let i = 0; i < renderPattern.length; i++) {
-    const p = renderPattern[i];
-    const x = mapX(p.time);
-    const h = velToHeight(p.velocity);
-    // gray bar for pattern (ensure it stays in the top band)
-    ctx.fillStyle = (i === highlightIdx) ? '#ff4d4d' : '#aaaaaa';
-    ctx.fillRect(x - halfBar, patternBaseline - h, barWidth, h);
-    // sticking label aligned to the top of the top band
-    if (p.sticking) {
+
+  // Instrument colors for multi-instrument view
+  const instColors = {
+    hihat: { pattern: '#888888', match: '#40a0ff' },
+    snare: { pattern: '#aaaaaa', match: '#1e90ff' },
+    kick:  { pattern: '#666666', match: '#0066cc' },
+    ride:  { pattern: '#999999', match: '#50b0ff' },
+    crash: { pattern: '#777777', match: '#3090ee' },
+    tom1:  { pattern: '#7a7a7a', match: '#2080dd' },
+    tom2:  { pattern: '#8a8a8a', match: '#3090ee' },
+    tom3:  { pattern: '#9a9a9a', match: '#40a0ff' },
+  };
+  const defaultColors = { pattern: '#aaaaaa', match: 'rgba(30,144,255,0.85)' };
+
+  if (isMultiInstrument) {
+    // Multi-instrument view: one row per instrument, each with pattern/match pair
+    const numInstruments = allInstruments.length;
+    const rowHeight = available / numInstruments;
+    const bandHeight = rowHeight / 2 - 4; // half for pattern, half for match, with gap
+    
+    ctx.textAlign = 'left';
+    ctx.font = '10px sans-serif';
+    
+    for (let idx = 0; idx < allInstruments.length; idx++) {
+      const inst = allInstruments[idx];
+      const colors = instColors[inst] || defaultColors;
+      const rowTop = padding + idx * rowHeight;
+      const patternBaseline = rowTop + bandHeight;
+      const matchBaseline = rowTop + rowHeight - 2;
+      
+      // Draw instrument label
       ctx.fillStyle = '#e0e0e0';
       ctx.textBaseline = 'top';
-      const labelY = padding + 2;
-      ctx.fillText(String(p.sticking), x, labelY);
+      ctx.fillText(inst, leftPad, rowTop + 2);
+      
+      // Draw pattern notes for this instrument
+      const patternNotes = renderPattern.filter(p => p.inst === inst);
+      for (const p of patternNotes) {
+        const x = mapX(p.time);
+        const h = velToHeight(p.velocity, bandHeight);
+        const patIdx = renderPattern.indexOf(p);
+        ctx.fillStyle = (patIdx === highlightIdx) ? '#ff4d4d' : colors.pattern;
+        ctx.fillRect(x - halfBar, patternBaseline - h, barWidth, h);
+      }
+      
+      // Draw match notes for this instrument
+      const matchNotes = (match || []).filter(m => m.inst === inst);
+      for (const m of matchNotes) {
+        const x = mapX(m.time);
+        const h = velToHeight(m.velocity, bandHeight);
+        ctx.fillStyle = colors.match;
+        ctx.fillRect(x - halfBar, matchBaseline - h, barWidth, h);
+      }
+      
+      // Draw separator line between instruments
+      if (idx < allInstruments.length - 1) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+        ctx.beginPath();
+        ctx.moveTo(leftPad, rowTop + rowHeight);
+        ctx.lineTo(W - rightPad, rowTop + rowHeight);
+        ctx.stroke();
+      }
     }
-  }
+  } else {
+    // Single instrument view (rudiments): original layout
+    const bandHeight = available / 2;
+    const patternBaseline = padding + bandHeight - 2;
+    const labelHeight = 12;
+    const matchBaseline = padding + available - labelHeight;
 
-  // Draw match (already scaled + translated by search) on the bottom band
-  if (match && match.length) {
-    for (let i = 0; i < match.length; i++) {
-      const m = match[i];
-      const x = mapX(m.time);
-      const h = velToHeight(m.velocity);
-      // blue bar for match (ensure it stays in the bottom band)
-      ctx.fillStyle = 'rgba(30,144,255,0.85)'; // dodgerblue
-      ctx.fillRect(x - halfBar, matchBaseline - h, barWidth, h);
-      // sticking label for match (draw all labels)
-      if (m.sticking) {
-        // Draw the sticking label in blue and below the match bar.
-        ctx.fillStyle = '#1e90ff'; // dodgerblue
+    // Draw pattern bars (background) on the top band
+    ctx.textAlign = 'center';
+    ctx.font = '11px sans-serif';
+    for (let i = 0; i < renderPattern.length; i++) {
+      const p = renderPattern[i];
+      const x = mapX(p.time);
+      const h = velToHeight(p.velocity, bandHeight);
+      ctx.fillStyle = (i === highlightIdx) ? '#ff4d4d' : '#aaaaaa';
+      ctx.fillRect(x - halfBar, patternBaseline - h, barWidth, h);
+      if (p.sticking) {
+        ctx.fillStyle = '#e0e0e0';
         ctx.textBaseline = 'top';
-        const labelY = matchBaseline + 6; // a small offset below the bar bottom
-        ctx.fillText(String(m.sticking), x, labelY);
+        const labelY = padding + 2;
+        ctx.fillText(String(p.sticking), x, labelY);
       }
     }
 
-    // Draw a faint line connecting match and pattern center to indicate offset/scale
-    ctx.strokeStyle = 'rgba(0,0,0,0.1)';
-    ctx.beginPath();
-    ctx.moveTo(leftPad, H / 2);
-    ctx.lineTo(W - rightPad, H / 2);
-    ctx.stroke();
+    // Draw match on the bottom band
+    if (match && match.length) {
+      for (let i = 0; i < match.length; i++) {
+        const m = match[i];
+        const x = mapX(m.time);
+        const h = velToHeight(m.velocity, bandHeight);
+        ctx.fillStyle = 'rgba(30,144,255,0.85)';
+        ctx.fillRect(x - halfBar, matchBaseline - h, barWidth, h);
+        if (m.sticking) {
+          ctx.fillStyle = '#1e90ff';
+          ctx.textBaseline = 'top';
+          const labelY = matchBaseline + 6;
+          ctx.fillText(String(m.sticking), x, labelY);
+        }
+      }
+
+      ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+      ctx.beginPath();
+      ctx.moveTo(leftPad, H / 2);
+      ctx.lineTo(W - rightPad, H / 2);
+      ctx.stroke();
+    }
   }
 
   // Draw performance bars (dynamics/timing) in the bottom area
@@ -3183,7 +3422,7 @@ function renderPatternMatch(pattern, match, scale, translate) {
   const metricsWidth = Math.max(1, barRight - barLeft);
   const barHeight = 16;
   const barGap = 10;
-  const barTop = padding + available + 15; // below the two bands
+  const barTop = padding + available + 15;
   const textPad = 90;
   const barStart = barLeft + textPad;
   const barW = Math.max(1, metricsWidth - textPad);
@@ -3232,8 +3471,6 @@ function renderPatternMatch(pattern, match, scale, translate) {
     const bpmText = isFinite(bpm) && bpm > 0 ? ('  ' + bpm.toFixed(1) + ' BPM') : '';
     ctx.fillText(label + bpmText, barStart, y + barHeight / 2);
   }
-
-  // (legend removed to keep the canvas area clean)
 }
 
 // Keep last render parameters (used to re-render after search without re-running it)
@@ -3252,7 +3489,7 @@ function search(pattern, match, velocityWeight, stickingWeight, opts = {}) {
   if (!trimmed || !trimmed.length) return;
 
   // Use raw match velocities; only convert pattern velocities to numeric
-  const pat = pattern.map((p) => ({ time: p.time, velocity: toNumericVelocity(p.velocity), sticking: p.sticking }));
+  const pat = pattern.map((p) => ({ time: p.time, velocity: toNumericVelocity(p.velocity), sticking: p.sticking, inst: p.inst }));
   const workMatch = trimmed;
   const t0 = performance.now();
 
@@ -3275,80 +3512,185 @@ function search(pattern, match, velocityWeight, stickingWeight, opts = {}) {
     return bestIdx;
   }
 
-  for (let pi = 0; pi < pat.length; pi++) {
-    const p0 = pat[pi];
-    const p1 = pat[pi + 1];
-    if (!p1) continue; // require a next beat
-    for (let mi = 0; mi < workMatch.length; mi++) {
-      const m0 = workMatch[mi];
-      for (let skip = 1; skip <= 3; skip++) {
-        const m1 = workMatch[mi + skip];
-        if (!m1) continue; // require a next beat (possibly skipping flams/drags)
+  // Check if this is a drumkit pattern (has instrument info)
+  const patternHasInstruments = pat.some(p => p.inst);
+  const matchHasInstruments = workMatch.some(m => m.inst);
+  const isDrumkit = patternHasInstruments && matchHasInstruments;
+  
+  // Get instruments being played
+  const playedInstruments = isDrumkit 
+    ? [...new Set(workMatch.filter(m => m.inst).map(m => m.inst))]
+    : null;
+  
+  // Get instruments that exist in both pattern and match
+  const matchableInstruments = isDrumkit
+    ? playedInstruments.filter(inst => pat.some(p => p.inst === inst))
+    : null;
 
-        const denom = (m1.time - m0.time);
-        if (Math.abs(denom) < denomEps) continue;
-
-        const scale = (p1.time - p0.time) / denom;
-        if (!isFinite(scale) || scale <= 0) continue;
-
-        const translate = p0.time - m0.time * scale;
-        if (translate < 0) continue; // do not explore negative translations
-        const scaledTimeMatch = scaleTime(workMatch, scale);
-        const mv0 = Number(m0.velocity || 0);
-        const pv0 = Number(p0.velocity || 0);
-        const vscale = mv0 > 0 ? (pv0 / mv0) : 1;
-        if (!isFinite(vscale) || vscale <= 0) continue;
-        const timeTranslated = translateTime(scaledTimeMatch, translate);
-        const scaledVelMatch = scaleVelocity(timeTranslated, vscale);
-        const sc = score(pat, scaledVelMatch, velocityWeight, stickingWeight);
-        if (Number.isFinite(sc.dynamics) && Number.isFinite(sc.timing) && sc.dynamics !== Number.MAX_VALUE && sc.timing !== Number.MAX_VALUE) {
-          const combined = Math.sqrt(sc.dynamics * sc.dynamics + sc.timing * sc.timing);
-          let finalScore = combined;
-          const latestIdx = mapLatestMatchToPattern(timeTranslated, pat);
-          if (window._lastMatchedPatternIdx !== null && latestIdx >= 0) {
-            const expected = window._lastMatchedPatternIdx + 1;
-            let diff = latestIdx - expected;
+  // For drumkit patterns with multiple instruments, try each as the "primary" 
+  // that determines the time scale, then score ALL instruments with that scale
+  if (isDrumkit && matchableInstruments && matchableInstruments.length > 0) {
+    // Group pattern and match by instrument
+    const patByInst = {};
+    const matchByInst = {};
+    for (const p of pat) {
+      if (!patByInst[p.inst]) patByInst[p.inst] = [];
+      patByInst[p.inst].push(p);
+    }
+    for (const m of workMatch) {
+      if (!matchByInst[m.inst]) matchByInst[m.inst] = [];
+      matchByInst[m.inst].push(m);
+    }
+    
+    // Try each matchable instrument as the "primary" for determining scale
+    for (const primaryInst of matchableInstruments) {
+      const primaryPat = patByInst[primaryInst] || [];
+      const primaryMatch = matchByInst[primaryInst] || [];
+      
+      if (primaryPat.length < 2 || primaryMatch.length < 2) continue;
+      
+      // Find scale candidates using this instrument
+      for (let pi = 0; pi < primaryPat.length - 1; pi++) {
+        const p0 = primaryPat[pi];
+        const p1 = primaryPat[pi + 1];
+        
+        for (let mi = 0; mi < primaryMatch.length; mi++) {
+          const m0 = primaryMatch[mi];
+          
+          for (let skip = 1; skip <= 3; skip++) {
+            const m1 = primaryMatch[mi + skip];
+            if (!m1) continue;
             
-            // Handle wrapping: use the visual cycle length for wrap detection
-            // Multiple cycle boundaries exist in the extended pattern
-            const cycleLen = window._notationHitsPerCycle || pat.length;
-            const lastPosInCycle = window._lastMatchedPatternIdx % cycleLen;
-            const latestPosInCycle = latestIdx % cycleLen;
+            const denom = m1.time - m0.time;
+            if (Math.abs(denom) < denomEps) continue;
             
-            // If we're near end of a cycle and latestIdx is near start of any cycle,
-            // treat as forward progress (wrapping)
-            if (lastPosInCycle >= cycleLen - 3 && latestPosInCycle < cycleLen / 4) {
-              // Wrapping within visual cycle - recalculate as forward progress
-              diff = latestPosInCycle + (cycleLen - lastPosInCycle - 1);
-              if (diff < 0) diff = 0; // ensure non-negative
-            }
+            const scale = (p1.time - p0.time) / denom;
+            if (!isFinite(scale) || scale <= 0) continue;
             
-            if (window._patternLocked) {
-              // When locked, enforce forward progress
-              if (diff < -LOCKED_JITTER_TOLERANCE) {
-                // Going backward beyond jitter tolerance - skip entirely
-                continue;
-              } else if (diff < 0) {
-                // Going backward within tolerance - heavy penalty to discourage
-                finalScore += Math.abs(diff) * 200;
-              } else if (diff === 0) {
-                // Exactly expected - small bonus
-                finalScore -= 5;
-              } else if (diff <= LOCKED_JITTER_TOLERANCE) {
-                // Small forward jump (1-2 notes) - slight penalty
-                finalScore += diff * 10;
-              } else {
-                // Large forward jump - bigger penalty
-                finalScore += (diff - LOCKED_JITTER_TOLERANCE) * LOCKED_JUMP_PENALTY_PER_NOTE + LOCKED_JITTER_TOLERANCE * 10;
+            const translate = p0.time - m0.time * scale;
+            if (translate < 0) continue;
+            
+            // Apply scale to ALL match notes (all instruments)
+            const scaledTimeMatch = scaleTime(workMatch, scale);
+            const mv0 = Number(m0.velocity || 0);
+            const pv0 = Number(p0.velocity || 0);
+            const vscale = mv0 > 0 ? (pv0 / mv0) : 1;
+            if (!isFinite(vscale) || vscale <= 0) continue;
+            
+            const timeTranslated = translateTime(scaledTimeMatch, translate);
+            const scaledVelMatch = scaleVelocity(timeTranslated, vscale);
+            
+            // Score ALL instruments with this scale (not just the primary)
+            const sc = score(pat, scaledVelMatch, velocityWeight, stickingWeight);
+            
+            if (Number.isFinite(sc.dynamics) && Number.isFinite(sc.timing) && 
+                sc.dynamics !== Number.MAX_VALUE && sc.timing !== Number.MAX_VALUE) {
+              const combined = Math.sqrt(sc.dynamics * sc.dynamics + sc.timing * sc.timing);
+              let finalScore = combined;
+              const latestIdx = mapLatestMatchToPattern(timeTranslated, pat);
+              
+              // Apply progress penalties
+              if (window._lastMatchedPatternIdx !== null && latestIdx >= 0) {
+                const expected = window._lastMatchedPatternIdx + 1;
+                let diff = latestIdx - expected;
+                const cycleLen = window._notationHitsPerCycle || pat.length;
+                const lastPosInCycle = window._lastMatchedPatternIdx % cycleLen;
+                const latestPosInCycle = latestIdx % cycleLen;
+                
+                if (lastPosInCycle >= cycleLen - 3 && latestPosInCycle < cycleLen / 4) {
+                  diff = latestPosInCycle + (cycleLen - lastPosInCycle - 1);
+                  if (diff < 0) diff = 0;
+                }
+                
+                if (window._patternLocked) {
+                  if (diff < -LOCKED_JITTER_TOLERANCE) continue;
+                  else if (diff < 0) finalScore += Math.abs(diff) * 200;
+                  else if (diff === 0) finalScore -= 5;
+                  else if (diff <= LOCKED_JITTER_TOLERANCE) finalScore += diff * 10;
+                  else finalScore += (diff - LOCKED_JITTER_TOLERANCE) * LOCKED_JUMP_PENALTY_PER_NOTE + LOCKED_JITTER_TOLERANCE * 10;
+                } else {
+                  if (latestIdx !== expected) finalScore += PROGRESS_PENALTY;
+                }
               }
-            } else {
-              // Not locked - use lighter penalty
-              if (latestIdx !== expected) {
-                finalScore += PROGRESS_PENALTY;
-              }
+              
+              candidates.push({ 
+                score: finalScore, 
+                dynamics: sc.dynamics, 
+                timing: sc.timing, 
+                reuseCount: sc.reuseCount, 
+                gapCount: sc.gapCount, 
+                stickingCount: sc.stickingCount, 
+                latestIdx, 
+                scale, 
+                translate, 
+                vscale, 
+                match: scaledVelMatch,
+                primaryInst  // track which instrument was used for scaling
+              });
             }
           }
-          candidates.push({ score: finalScore, dynamics: sc.dynamics, timing: sc.timing, reuseCount: sc.reuseCount, gapCount: sc.gapCount, stickingCount: sc.stickingCount, latestIdx, scale, translate, vscale, match: scaledVelMatch });
+        }
+      }
+    }
+  } else {
+    // Original search for rudiments (no instruments)
+    for (let pi = 0; pi < pat.length; pi++) {
+      const p0 = pat[pi];
+      const p1 = pat[pi + 1];
+      if (!p1) continue;
+      
+      for (let mi = 0; mi < workMatch.length; mi++) {
+        const m0 = workMatch[mi];
+        
+        for (let skip = 1; skip <= 3; skip++) {
+          const m1 = workMatch[mi + skip];
+          if (!m1) continue;
+
+          const denom = (m1.time - m0.time);
+          if (Math.abs(denom) < denomEps) continue;
+
+          const scale = (p1.time - p0.time) / denom;
+          if (!isFinite(scale) || scale <= 0) continue;
+
+          const translate = p0.time - m0.time * scale;
+          if (translate < 0) continue;
+          const scaledTimeMatch = scaleTime(workMatch, scale);
+          const mv0 = Number(m0.velocity || 0);
+          const pv0 = Number(p0.velocity || 0);
+          const vscale = mv0 > 0 ? (pv0 / mv0) : 1;
+          if (!isFinite(vscale) || vscale <= 0) continue;
+          const timeTranslated = translateTime(scaledTimeMatch, translate);
+          const scaledVelMatch = scaleVelocity(timeTranslated, vscale);
+          const sc = score(pat, scaledVelMatch, velocityWeight, stickingWeight);
+          if (Number.isFinite(sc.dynamics) && Number.isFinite(sc.timing) && sc.dynamics !== Number.MAX_VALUE && sc.timing !== Number.MAX_VALUE) {
+            const combined = Math.sqrt(sc.dynamics * sc.dynamics + sc.timing * sc.timing);
+            let finalScore = combined;
+            const latestIdx = mapLatestMatchToPattern(timeTranslated, pat);
+            if (window._lastMatchedPatternIdx !== null && latestIdx >= 0) {
+              const expected = window._lastMatchedPatternIdx + 1;
+              let diff = latestIdx - expected;
+              
+              const cycleLen = window._notationHitsPerCycle || pat.length;
+              const lastPosInCycle = window._lastMatchedPatternIdx % cycleLen;
+              const latestPosInCycle = latestIdx % cycleLen;
+              
+              if (lastPosInCycle >= cycleLen - 3 && latestPosInCycle < cycleLen / 4) {
+                diff = latestPosInCycle + (cycleLen - lastPosInCycle - 1);
+                if (diff < 0) diff = 0;
+              }
+              
+              if (window._patternLocked) {
+                if (diff < -LOCKED_JITTER_TOLERANCE) continue;
+                else if (diff < 0) finalScore += Math.abs(diff) * 200;
+                else if (diff === 0) finalScore -= 5;
+                else if (diff <= LOCKED_JITTER_TOLERANCE) finalScore += diff * 10;
+                else finalScore += (diff - LOCKED_JITTER_TOLERANCE) * LOCKED_JUMP_PENALTY_PER_NOTE + LOCKED_JITTER_TOLERANCE * 10;
+              } else {
+                if (latestIdx !== expected) finalScore += PROGRESS_PENALTY;
+              }
+            }
+            candidates.push({ score: finalScore, dynamics: sc.dynamics, timing: sc.timing, reuseCount: sc.reuseCount, gapCount: sc.gapCount, stickingCount: sc.stickingCount, latestIdx, scale, translate, vscale, match: scaledVelMatch });
+          }
         }
       }
     }
