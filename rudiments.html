@@ -607,8 +607,12 @@ function score(pattern, match, velocityWeight, stickingWeight) {
 function scoreSingleInstrument(patternNotes, matchNotes, velocityWeight) {
   function square(x) { return x * x; }
   
-  if (!patternNotes.length || !matchNotes.length) {
-    return { timing: 0, dynamics: 0, matched: 0, total: patternNotes.length, reuseCount: 0, gapCount: 0 };
+  if (!patternNotes.length) {
+    return { timing: 0, dynamics: 0, matched: 0, total: 0, reuseCount: 0, gapCount: 0 };
+  }
+
+  if (!matchNotes.length) {
+    return { timing: 0, dynamics: 0, matched: 0, total: patternNotes.length, reuseCount: 0, gapCount: patternNotes.length };
   }
   
   let timing = 0;
@@ -692,20 +696,19 @@ function scorePerInstrument(pattern, match, velocityWeight, stickingWeight) {
     patternByInst[inst].push(p);
   }
   
-  // Group match notes by instrument
+  // Group match notes by instrument (windowed)
   const matchByInst = {};
   for (const m of recentMatch) {
     const inst = m.inst || 'snare';
     if (!matchByInst[inst]) matchByInst[inst] = [];
     matchByInst[inst].push(m);
   }
-  
-  // Get instruments that are being played
-  const playedInstruments = Object.keys(matchByInst);
-  
-  // If none of the played instruments are in the pattern, no match
-  const relevantInstruments = playedInstruments.filter(inst => patternByInst[inst]);
-  if (!relevantInstruments.length) {
+
+  const windowStart = recentMatch[0].time;
+  const windowEnd = recentMatch[recentMatch.length - 1].time;
+  const windowPad = 1e-3;
+  const patternInstruments = Object.keys(patternByInst);
+  if (!patternInstruments.length) {
     return { dynamics: Number.MAX_VALUE, timing: Number.MAX_VALUE, reuseCount: 0, gapCount: 0, stickingCount: 0 };
   }
   
@@ -716,11 +719,12 @@ function scorePerInstrument(pattern, match, velocityWeight, stickingWeight) {
   let totalGapCount = 0;
   let totalNotes = 0;
   
-  for (const inst of relevantInstruments) {
-    const patNotes = patternByInst[inst] || [];
-    const matNotes = matchByInst[inst] || [];
-    
+  for (const inst of patternInstruments) {
+    const patNotesAll = patternByInst[inst] || [];
+    const patNotes = patNotesAll.filter(p => p.time >= windowStart - windowPad && p.time <= windowEnd + windowPad);
     if (patNotes.length === 0) continue;
+    const matNotesAll = matchByInst[inst] || [];
+    const matNotes = matNotesAll.filter(m => m.time >= windowStart - windowPad && m.time <= windowEnd + windowPad);
     
     const instScore = scoreSingleInstrument(patNotes, matNotes, velocityWeight);
     
@@ -735,6 +739,13 @@ function scorePerInstrument(pattern, match, velocityWeight, stickingWeight) {
   
   if (totalNotes === 0) {
     return { dynamics: Number.MAX_VALUE, timing: Number.MAX_VALUE, reuseCount: 0, gapCount: 0, stickingCount: 0 };
+  }
+
+  // Penalize hits on instruments not present in the pattern (within window)
+  for (const [inst, notes] of Object.entries(matchByInst)) {
+    if (patternByInst[inst]) continue;
+    const extraCount = notes.filter(m => m.time >= windowStart - windowPad && m.time <= windowEnd + windowPad).length;
+    if (extraCount > 0) totalReuseCount += extraCount;
   }
   
   const avgTiming = totalTiming / totalNotes;
@@ -944,41 +955,41 @@ const ride = 'ride', crash = 'crash';
 const tom1 = 'tom1', tom2 = 'tom2', tom3 = 'tom3';
 const hihatFoot = 'hihat-foot';
 
-// General MIDI drum note to instrument mapping
-// Based on GM1 Sound Set standard
+// MIDI drum note to instrument mapping (custom kit)
 const MIDI_DRUM_MAP = {
-  // Kick drums
-  35: 'kick', // Acoustic Bass Drum
-  36: 'kick', // Bass Drum 1
-  // Snare drums
-  38: 'snare', // Acoustic Snare
-  40: 'snare', // Electric Snare
-  37: 'snare', // Side Stick
+  // Kick
+  36: 'kick', // Kick
+  // Snare
+  38: 'snare', // Snare (wires on)
+  19: 'snare', // Snare (wires off)
+  // snare rim: 40 (wires on), 18 (wires off)
+  // snare xstick: 37 (wires on), 19 (wires off)
+  // snare brush: 23 (wires on), 16 (wires off)
   // Hi-hat
-  42: 'hihat', // Closed Hi-Hat
-  44: 'hihat-foot', // Pedal Hi-Hat (foot)
-  46: 'hihat', // Open Hi-Hat
+  46: 'hihat', // Hi-hat bow (open)
+  26: 'hihat', // Hi-hat edge (open)
+  42: 'hihat', // Hi-hat bow (closed)
+  22: 'hihat', // Hi-hat edge (closed)
+  // hi-hat splash: 44
+  // hi-hat pedal: CC 4
   // Toms
-  50: 'tom1', // High Tom
-  48: 'tom1', // Hi-Mid Tom
-  47: 'tom2', // Low-Mid Tom
-  45: 'tom2', // Low Tom
-  43: 'tom3', // High Floor Tom
-  41: 'tom3', // Low Floor Tom
+  48: 'tom1', // High tom
+  50: 'tom1', // High tom (rim)
+  45: 'tom2', // Mid tom
+  47: 'tom2', // Mid tom (rim)
+  43: 'tom3', // Low tom
+  58: 'tom3', // Low tom (rim)
+  41: 'tom4', // Floor tom
+  39: 'tom4', // Floor tom (rim)
   // Cymbals
-  49: 'crash', // Crash Cymbal 1
-  57: 'crash', // Crash Cymbal 2
-  51: 'ride', // Ride Cymbal 1
-  59: 'ride', // Ride Cymbal 2
+  49: 'crash', // Crash 1
+  55: 'crash', // Crash 1
+  57: 'crash', // Crash 2
+  52: 'crash', // Crash 2
+  51: 'ride', // Ride Bow
+  59: 'ride', // Ride Edge
   53: 'ride', // Ride Bell
-  52: 'crash', // Chinese Cymbal
-  55: 'crash', // Splash Cymbal
-  // Extended snare (Roland pads)
-  23: 'snare', // Snare Brush
-  19: 'snare', // Snare Head (wires off)
-  18: 'snare', // Snare Rim (wires off)
-  16: 'snare', // Snare Brush (wires off)
-  17: 'snare', // Snare XStick (wires off)
+  // extra symbal: 29/30 & 31 (only)
 };
 
 // Get instrument code from MIDI note number
