@@ -1203,6 +1203,8 @@ const PATTERN_GROUPS = {
     "five-stroke-roll-r",
     "five-stroke-roll-l",
     "five-stroke-roll-alt",
+    "triple-stroke-roll",
+    "quadruple-stroke-roll",
   ],
   "Paradiddles": [
     "single-paradiddle",
@@ -1256,6 +1258,31 @@ const PATTERN_DEFS = {
     notes: [
       { type: 'double', hand: R, dur: 16 },
       { type: 'double', hand: L, dur: 16 },
+    ]
+  },
+  "triple-stroke-roll": {
+    name: "Triple Stroke Roll",
+    beamGroup: 3,
+    notes: [
+      { type: 'single', hand: R, dur: 12 },
+      { type: 'single', hand: R, dur: 12 },
+      { type: 'single', hand: R, dur: 12 },
+      { type: 'single', hand: L, dur: 12 },
+      { type: 'single', hand: L, dur: 12 },
+      { type: 'single', hand: L, dur: 12 },
+    ]
+  },
+  "quadruple-stroke-roll": {
+    name: "Quadruple Stroke Roll",
+    notes: [
+      { type: 'single', hand: R, dur: 16 },
+      { type: 'single', hand: R, dur: 16 },
+      { type: 'single', hand: R, dur: 16 },
+      { type: 'single', hand: R, dur: 16 },
+      { type: 'single', hand: L, dur: 16 },
+      { type: 'single', hand: L, dur: 16 },
+      { type: 'single', hand: L, dur: 16 },
+      { type: 'single', hand: L, dur: 16 },
     ]
   },
   "five-stroke-roll-r": {
