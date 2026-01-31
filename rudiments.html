@@ -93,7 +93,8 @@ window._snareAngleCc = null;
 window._pendingStickLearn = null;
 window._bpmTarget = 120;
 const SCORE_DECAY_MS = 8000; // time constant for exponential weight and pruning
-const MAX_MATCH_BEATS = 16; // limit match buffer to most recent beats
+const MAX_MATCH_BEATS = 16; // limit match buffer to most recent beats (rudiments)
+const MAX_MATCH_EVENTS_DRUMKIT = 48; // allow longer multi-instrument match window
 const STICKING_MISMATCH_BASE = 50000; // base penalty multiplier for sticking mismatches
 const NOTE_AGE_CUTOFF_MS = 8000; // discard notes older than this relative to end
 const MATCH_RESET_GAP_MS = 3000; // reset match if there's a long pause between hits
@@ -229,8 +230,11 @@ function addMatchNoteAt(nowTimeMs, velocity, sticking, inst) {
   while (window._matchBuffer.length && window._matchBuffer[0].time < decayCutoff) {
     window._matchBuffer.shift();
   }
-  // Keep only the most recent MAX_MATCH_BEATS events
-  while (window._matchBuffer.length > MAX_MATCH_BEATS) {
+  // Keep only the most recent events (larger window for multi-instrument drumkit)
+  const maxEvents = (window._extendedPattern && window._extendedPattern._type === 'drumkit')
+    ? MAX_MATCH_EVENTS_DRUMKIT
+    : MAX_MATCH_BEATS;
+  while (window._matchBuffer.length > maxEvents) {
     window._matchBuffer.shift();
   }
   // debug
@@ -680,9 +684,10 @@ function scoreSingleInstrument(patternNotes, matchNotes, velocityWeight) {
 // Per-instrument scoring for drumkit patterns
 // Scores each instrument independently, then combines
 function scorePerInstrument(pattern, match, velocityWeight, stickingWeight) {
-  const end = match[match.length - 1].time;
+  const sortedMatch = match.slice().sort((a, b) => a.time - b.time);
+  const end = sortedMatch[sortedMatch.length - 1].time;
   const recentCutoff = end - SCORE_DECAY_MS;
-  const recentMatch = match.filter(m => m.time >= recentCutoff);
+  const recentMatch = sortedMatch.filter(m => m.time >= recentCutoff);
   
   if (!recentMatch.length) {
     return { dynamics: Number.MAX_VALUE, timing: Number.MAX_VALUE, reuseCount: 0, gapCount: 0, stickingCount: 0 };
@@ -704,8 +709,6 @@ function scorePerInstrument(pattern, match, velocityWeight, stickingWeight) {
     matchByInst[inst].push(m);
   }
 
-  const windowStart = recentMatch[0].time;
-  const windowEnd = recentMatch[recentMatch.length - 1].time;
   const windowPad = 1e-3;
   const patternInstruments = Object.keys(patternByInst);
   if (!patternInstruments.length) {
@@ -721,10 +724,13 @@ function scorePerInstrument(pattern, match, velocityWeight, stickingWeight) {
   
   for (const inst of patternInstruments) {
     const patNotesAll = patternByInst[inst] || [];
-    const patNotes = patNotesAll.filter(p => p.time >= windowStart - windowPad && p.time <= windowEnd + windowPad);
-    if (patNotes.length === 0) continue;
     const matNotesAll = matchByInst[inst] || [];
-    const matNotes = matNotesAll.filter(m => m.time >= windowStart - windowPad && m.time <= windowEnd + windowPad);
+    if (matNotesAll.length === 0) continue;
+    const instWindowStart = matNotesAll[0].time;
+    const instWindowEnd = matNotesAll[matNotesAll.length - 1].time;
+    const patNotes = patNotesAll.filter(p => p.time >= instWindowStart - windowPad && p.time <= instWindowEnd + windowPad);
+    if (patNotes.length === 0) continue;
+    const matNotes = matNotesAll.filter(m => m.time >= instWindowStart - windowPad && m.time <= instWindowEnd + windowPad);
     
     const instScore = scoreSingleInstrument(patNotes, matNotes, velocityWeight);
     
@@ -744,7 +750,7 @@ function scorePerInstrument(pattern, match, velocityWeight, stickingWeight) {
   // Penalize hits on instruments not present in the pattern (within window)
   for (const [inst, notes] of Object.entries(matchByInst)) {
     if (patternByInst[inst]) continue;
-    const extraCount = notes.filter(m => m.time >= windowStart - windowPad && m.time <= windowEnd + windowPad).length;
+    const extraCount = notes.length;
     if (extraCount > 0) totalReuseCount += extraCount;
   }
   
@@ -1049,7 +1055,7 @@ function parseDrumkitVoices(voices, beatMs = 256, opts = {}) {
   if (!repeat || events.length === 0 || maxTime <= 0) return events;
 
   // Repeat pattern to cover match buffer
-  const minHits = MAX_MATCH_BEATS * 2;
+  const minHits = MAX_MATCH_EVENTS_DRUMKIT * 2;
   const repeats = Math.max(2, Math.ceil(minHits / hitCount));
   const extended = [];
   for (let r = 0; r < repeats; r++) {
@@ -2808,6 +2814,10 @@ function renderNotation(patternName) {
 function computeTimingErrors(pattern, match, latestPatternIdx) {
   if (!pattern || !pattern.length || !match || !match.length) return;
   
+  const patternHasInst = pattern.some(p => p.inst);
+  const matchHasInst = match.some(m => m.inst);
+  const useInst = patternHasInst && matchHasInst;
+  
   const hitsPerCycle = window._notationHitsPerCycle || pattern.length;
   const errorAnchorMap = window._notationErrorAnchorMap || {};
   
@@ -2844,6 +2854,7 @@ function computeTimingErrors(pattern, match, latestPatternIdx) {
     let bestDist = Number.MAX_VALUE;
     
     for (let pi = 0; pi < pattern.length; pi++) {
+      if (useInst && (pattern[pi].inst || 'S') !== (m.inst || 'S')) continue;
       const dist = Math.abs(pattern[pi].time - m.time);
       if (dist < bestDist) {
         bestDist = dist;
@@ -3508,12 +3519,17 @@ function search(pattern, match, velocityWeight, stickingWeight, opts = {}) {
   const denomEps = 1e-6;
   const topN = TOP_CANDIDATES;
 
-  function mapLatestMatchToPattern(transformedMatch, patArr) {
+  function mapLatestMatchToPattern(transformedMatch, patArr, instFilter = null) {
     if (!transformedMatch.length) return -1;
-    const last = transformedMatch[transformedMatch.length - 1];
+    const filteredMatch = instFilter
+      ? transformedMatch.filter(m => m.inst === instFilter)
+      : transformedMatch;
+    if (!filteredMatch.length) return -1;
+    const last = filteredMatch[filteredMatch.length - 1];
     let bestIdx = -1;
     let bestDist = Number.MAX_VALUE;
     for (let i = 0; i < patArr.length; i++) {
+      if (instFilter && patArr[i].inst !== instFilter) continue;
       const dist = Math.abs(patArr[i].time - last.time);
       if (dist < bestDist) {
         bestDist = dist;
@@ -3598,7 +3614,7 @@ function search(pattern, match, velocityWeight, stickingWeight, opts = {}) {
                 sc.dynamics !== Number.MAX_VALUE && sc.timing !== Number.MAX_VALUE) {
               const combined = Math.sqrt(sc.dynamics * sc.dynamics + sc.timing * sc.timing);
               let finalScore = combined;
-              const latestIdx = mapLatestMatchToPattern(timeTranslated, pat);
+              const latestIdx = mapLatestMatchToPattern(timeTranslated, pat, primaryInst);
               
               // Apply progress penalties
               if (window._lastMatchedPatternIdx !== null && latestIdx >= 0) {
