@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Metronome</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 20px;
+      background: #111;
+      color: #fff;
+      font-family: sans-serif;
+      min-height: 100vh;
+      box-sizing: border-box;
+    }
+    h1 {
+      margin: 0 0 20px 0;
+      font-size: 2em;
+    }
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    .bpm-display {
+      font-size: 8em;
+      font-weight: bold;
+      text-align: center;
+      margin: 20px 0;
+      font-variant-numeric: tabular-nums;
+    }
+    .bpm-slider-container {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      margin-bottom: 30px;
+    }
+    .bpm-slider {
+      flex: 1;
+      -webkit-appearance: none;
+      appearance: none;
+      height: 20px;
+      background: #333;
+      border-radius: 10px;
+      outline: none;
+    }
+    .bpm-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 40px;
+      height: 40px;
+      background: #fff;
+      border-radius: 50%;
+      cursor: pointer;
+    }
+    .bpm-slider::-moz-range-thumb {
+      width: 40px;
+      height: 40px;
+      background: #fff;
+      border-radius: 50%;
+      cursor: pointer;
+      border: none;
+    }
+    .bpm-input {
+      width: 80px;
+      padding: 10px;
+      font-size: 1.2em;
+      background: #222;
+      color: #fff;
+      border: 1px solid #444;
+      border-radius: 6px;
+      text-align: center;
+    }
+    .control-row {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      margin-bottom: 15px;
+    }
+    .control-label {
+      min-width: 160px;
+      color: #aaa;
+    }
+    .control-input {
+      width: 80px;
+      padding: 10px;
+      font-size: 1em;
+      background: #222;
+      color: #fff;
+      border: 1px solid #444;
+      border-radius: 6px;
+      text-align: center;
+    }
+    .control-unit {
+      color: #666;
+      min-width: 60px;
+    }
+    .toggle-group {
+      display: flex;
+      gap: 0;
+    }
+    .toggle-btn {
+      padding: 10px 20px;
+      background: #222;
+      color: #888;
+      border: 1px solid #444;
+      cursor: pointer;
+      font-size: 1em;
+      transition: all 0.15s;
+    }
+    .toggle-btn:first-child {
+      border-radius: 6px 0 0 6px;
+    }
+    .toggle-btn:last-child {
+      border-radius: 0 6px 6px 0;
+      border-left: none;
+    }
+    .toggle-btn.active {
+      background: #fff;
+      color: #111;
+    }
+    .section {
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .section-title {
+      font-size: 1.1em;
+      color: #888;
+      margin-bottom: 15px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 15px;
+    }
+    .checkbox-row input[type="checkbox"] {
+      width: 24px;
+      height: 24px;
+      accent-color: #fff;
+      cursor: pointer;
+    }
+    .checkbox-label {
+      color: #ddd;
+      cursor: pointer;
+    }
+    .start-btn {
+      width: 100%;
+      padding: 20px;
+      font-size: 1.5em;
+      font-weight: bold;
+      background: #2a2;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .start-btn:hover {
+      background: #3b3;
+    }
+    .start-btn.running {
+      background: #c33;
+    }
+    .start-btn.running:hover {
+      background: #d44;
+    }
+    .beat-indicator {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      margin: 20px 0;
+    }
+    .beat-dot {
+      width: 20px;
+      height: 20px;
+      background: #333;
+      border-radius: 50%;
+      transition: background 0.05s;
+    }
+    .beat-dot.active {
+      background: #fff;
+    }
+    .stats {
+      text-align: center;
+      color: #666;
+      font-size: 0.9em;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Metronome</h1>
+
+    <div class="bpm-display" id="bpmDisplay">120</div>
+
+    <div class="bpm-slider-container">
+      <input type="range" class="bpm-slider" id="bpmSlider" min="20" max="300" value="120">
+      <input type="number" class="bpm-input" id="bpmInput" min="20" max="300" value="120">
+    </div>
+
+    <div class="beat-indicator" id="beatIndicator">
+      <div class="beat-dot"></div>
+      <div class="beat-dot"></div>
+      <div class="beat-dot"></div>
+      <div class="beat-dot"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Auto Increment</div>
+      
+      <div class="checkbox-row">
+        <input type="checkbox" id="autoIncrementEnabled">
+        <label class="checkbox-label" for="autoIncrementEnabled">Enable auto tempo increase</label>
+      </div>
+
+      <div class="control-row">
+        <span class="control-label">Starting BPM</span>
+        <input type="number" class="control-input" id="startBpm" min="20" max="300" value="60">
+      </div>
+
+      <div class="control-row">
+        <span class="control-label">Increment by</span>
+        <input type="number" class="control-input" id="incrementAmount" min="1" max="50" value="5">
+        <span class="control-unit">BPM</span>
+      </div>
+
+      <div class="control-row">
+        <span class="control-label">Every</span>
+        <input type="number" class="control-input" id="incrementInterval" min="1" max="999" value="10">
+        <div class="toggle-group">
+          <button class="toggle-btn active" id="modeBeats" data-mode="beats">beats</button>
+          <button class="toggle-btn" id="modeSeconds" data-mode="seconds">seconds</button>
+        </div>
+      </div>
+
+      <div class="control-row">
+        <span class="control-label">Max BPM</span>
+        <input type="number" class="control-input" id="maxBpm" min="20" max="400" value="200">
+      </div>
+    </div>
+
+    <button class="start-btn" id="startBtn">START</button>
+
+    <div class="stats" id="stats"></div>
+  </div>
+
+  <script>
+    // Audio context and sounds
+    let audioCtx = null;
+    
+    function initAudio() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+    }
+
+    function playClick(accent = false) {
+      if (!audioCtx) return;
+      
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      
+      osc.frequency.value = accent ? 1000 : 800;
+      osc.type = 'sine';
+      
+      const now = audioCtx.currentTime;
+      gain.gain.setValueAtTime(accent ? 0.3 : 0.2, now);
+      gain.gain.exponentialDecayTo ? 
+        gain.gain.exponentialDecayTo(0.001, now + 0.1) :
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+      
+      osc.start(now);
+      osc.stop(now + 0.1);
+    }
+
+    // State
+    let isRunning = false;
+    let currentBpm = 120;
+    let beatCount = 0;
+    let startTime = 0;
+    let nextBeatTime = 0;
+    let timerInterval = null;
+    let incrementMode = 'beats'; // 'beats' or 'seconds'
+    let lastIncrementBeat = 0;
+    let lastIncrementTime = 0;
+
+    // DOM elements
+    const bpmDisplay = document.getElementById('bpmDisplay');
+    const bpmSlider = document.getElementById('bpmSlider');
+    const bpmInput = document.getElementById('bpmInput');
+    const startBtn = document.getElementById('startBtn');
+    const beatIndicator = document.getElementById('beatIndicator');
+    const stats = document.getElementById('stats');
+    
+    const autoIncrementEnabled = document.getElementById('autoIncrementEnabled');
+    const startBpmInput = document.getElementById('startBpm');
+    const incrementAmount = document.getElementById('incrementAmount');
+    const incrementInterval = document.getElementById('incrementInterval');
+    const maxBpmInput = document.getElementById('maxBpm');
+    const modeBeats = document.getElementById('modeBeats');
+    const modeSeconds = document.getElementById('modeSeconds');
+
+    // BPM control
+    function setBpm(bpm, updateInputs = true) {
+      bpm = Math.max(20, Math.min(400, Math.round(bpm)));
+      currentBpm = bpm;
+      bpmDisplay.textContent = bpm;
+      if (updateInputs) {
+        bpmSlider.value = Math.min(300, bpm);
+        bpmInput.value = bpm;
+      }
+    }
+
+    bpmSlider.addEventListener('input', () => {
+      setBpm(parseInt(bpmSlider.value), false);
+      bpmInput.value = currentBpm;
+    });
+
+    bpmInput.addEventListener('change', () => {
+      setBpm(parseInt(bpmInput.value), false);
+      bpmSlider.value = Math.min(300, currentBpm);
+    });
+
+    // Mode toggle
+    function setMode(mode) {
+      incrementMode = mode;
+      modeBeats.classList.toggle('active', mode === 'beats');
+      modeSeconds.classList.toggle('active', mode === 'seconds');
+    }
+
+    modeBeats.addEventListener('click', () => setMode('beats'));
+    modeSeconds.addEventListener('click', () => setMode('seconds'));
+
+    // Beat indicator
+    function updateBeatIndicator(beat) {
+      const dots = beatIndicator.querySelectorAll('.beat-dot');
+      dots.forEach((dot, i) => {
+        dot.classList.toggle('active', i === beat % 4);
+      });
+    }
+
+    // Metronome logic
+    function tick() {
+      const now = performance.now();
+      
+      while (nextBeatTime <= now) {
+        const beatInMeasure = beatCount % 4;
+        playClick(beatInMeasure === 0);
+        updateBeatIndicator(beatInMeasure);
+        
+        beatCount++;
+        
+        // Check for auto increment
+        if (autoIncrementEnabled.checked) {
+          const maxBpm = parseInt(maxBpmInput.value) || 400;
+          const increment = parseInt(incrementAmount.value) || 5;
+          const interval = parseInt(incrementInterval.value) || 10;
+          
+          let shouldIncrement = false;
+          
+          if (incrementMode === 'beats') {
+            if (beatCount - lastIncrementBeat >= interval) {
+              shouldIncrement = true;
+              lastIncrementBeat = beatCount;
+            }
+          } else {
+            const elapsedSeconds = (now - lastIncrementTime) / 1000;
+            if (elapsedSeconds >= interval) {
+              shouldIncrement = true;
+              lastIncrementTime = now;
+            }
+          }
+          
+          if (shouldIncrement && currentBpm < maxBpm) {
+            setBpm(Math.min(currentBpm + increment, maxBpm));
+          }
+        }
+        
+        // Calculate next beat time
+        const beatDuration = 60000 / currentBpm;
+        nextBeatTime += beatDuration;
+      }
+      
+      // Update stats
+      const elapsed = (now - startTime) / 1000;
+      const mins = Math.floor(elapsed / 60);
+      const secs = Math.floor(elapsed % 60);
+      stats.textContent = `Beat ${beatCount} | ${mins}:${secs.toString().padStart(2, '0')}`;
+    }
+
+    function start() {
+      initAudio();
+      
+      if (autoIncrementEnabled.checked) {
+        const startBpm = parseInt(startBpmInput.value) || 60;
+        setBpm(startBpm);
+      }
+      
+      isRunning = true;
+      beatCount = 0;
+      startTime = performance.now();
+      nextBeatTime = startTime;
+      lastIncrementBeat = 0;
+      lastIncrementTime = startTime;
+      
+      startBtn.textContent = 'STOP';
+      startBtn.classList.add('running');
+      
+      tick(); // First beat immediately
+      timerInterval = setInterval(tick, 10);
+    }
+
+    function stop() {
+      isRunning = false;
+      
+      if (timerInterval) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+      }
+      
+      startBtn.textContent = 'START';
+      startBtn.classList.remove('running');
+      
+      // Reset beat indicator
+      const dots = beatIndicator.querySelectorAll('.beat-dot');
+      dots.forEach(dot => dot.classList.remove('active'));
+      
+      stats.textContent = '';
+    }
+
+    startBtn.addEventListener('click', () => {
+      if (isRunning) {
+        stop();
+      } else {
+        start();
+      }
+    });
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', (e) => {
+      if (e.code === 'Space' && e.target.tagName !== 'INPUT') {
+        e.preventDefault();
+        if (isRunning) {
+          stop();
+        } else {
+          start();
+        }
+      }
+    });
+
+    // Wake Lock to prevent device from sleeping
+    let wakeLock = null;
+    async function requestWakeLock() {
+      try {
+        if ('wakeLock' in navigator) {
+          wakeLock = await navigator.wakeLock.request('screen');
+          wakeLock.addEventListener('release', () => {
+            console.log('Wake Lock released');
+          });
+        }
+      } catch (err) {
+        console.log('Wake Lock error:', err.message);
+      }
+    }
+    
+    requestWakeLock();
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        requestWakeLock();
+      }
+    });
+  </script>
+</body>
+</html>
