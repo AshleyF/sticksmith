@@ -127,21 +127,71 @@
   </div>
 
   <script>
-    // Drum note lookup table
+    // Drum note lookup table (custom kit + common GM percussion)
     const drumMap = {
-      // Snare (normal)
-      38: 'Snare Head',
-      40: 'Snare Rim',
+      // Custom kit mappings (from rudiments.html)
+      36: 'Kick',
+      38: 'Snare Head (wires on)',
+      19: 'Snare Head (wires off)',
+      46: 'Hi-hat Bow (open)',
+      26: 'Hi-hat Edge (open)',
+      42: 'Hi-hat Bow (closed)',
+      22: 'Hi-hat Edge (closed)',
+
+      // Snare variants / brushes
+      40: 'Snare Rim (electric)',
       23: 'Snare Brush',
       37: 'Snare XStick',
-      // Snare (wires off)
-      19: 'Snare Head (wires off)',
       18: 'Snare Rim (wires off)',
       16: 'Snare Brush (wires off)',
       17: 'Snare XStick (wires off)',
+
       // Wire lever
       20: 'Wires Off',
       21: 'Wires On',
+
+      // GM drum set (common percussion mappings)
+      35: 'Acoustic Bass Drum',
+      39: 'Hand Clap',
+      41: 'Low Floor Tom',
+      43: 'High Floor Tom',
+      44: 'Pedal Hi-hat',
+      45: 'Low Tom',
+      47: 'Low-Mid Tom',
+      48: 'Hi-Mid Tom',
+      50: 'High Tom',
+      49: 'Crash Cymbal 1',
+      51: 'Ride Cymbal 1',
+      52: 'Chinese Cymbal',
+      53: 'Ride Bell',
+      54: 'Tambourine',
+      55: 'Splash Cymbal',
+      56: 'Cowbell',
+      57: 'Crash Cymbal 2',
+      58: 'Vibraslap',
+      59: 'Ride Cymbal 2',
+      60: 'Hi Bongo',
+      61: 'Low Bongo',
+      62: 'Mute Hi Conga',
+      63: 'Open Hi Conga',
+      64: 'Low Conga',
+      65: 'High Timbale',
+      66: 'Low Timbale',
+      67: 'High Agogo',
+      68: 'Low Agogo',
+      69: 'Cabasa',
+      70: 'Maracas',
+      71: 'Short Whistle',
+      72: 'Long Whistle',
+      73: 'Short Guiro',
+      74: 'Long Guiro',
+      75: 'Claves',
+      76: 'Hi Wood Block',
+      77: 'Low Wood Block',
+      78: 'Mute Cuica',
+      79: 'Open Cuica',
+      80: 'Mute Triangle',
+      81: 'Open Triangle',
     };
 
     // CC name lookup
