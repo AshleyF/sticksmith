@@ -193,8 +193,6 @@
 </head>
 <body>
   <div class="container">
-    <h1>Metronome</h1>
-
     <div class="bpm-display" id="bpmDisplay">120</div>
 
     <div class="bpm-slider-container">
@@ -248,7 +246,7 @@
         <input type="number" class="control-input" id="incrementInterval" min="1" max="999" value="10">
         <select id="incrementMode">
           <option value="beats">beats</option>
-          <option value="seconds">seconds</option>
+          <option value="seconds" selected>seconds</option>
         </select>
       </div>
     </div>
@@ -563,7 +561,55 @@
       }
     });
 
+    // LocalStorage persistence
+    const STORAGE_KEY = 'metronome_prefs';
+    
+    function savePrefs() {
+      const prefs = {
+        bpm: currentBpm,
+        timeSignature: timeSignature.value,
+        soundType: document.getElementById('soundType').value,
+        autoIncrement: autoIncrementEnabled.checked,
+        incrementAmount: incrementAmount.value,
+        incrementInterval: incrementInterval.value,
+        incrementMode: incrementMode.value
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
+    }
+    
+    function loadPrefs() {
+      try {
+        const stored = localStorage.getItem(STORAGE_KEY);
+        if (stored) {
+          const prefs = JSON.parse(stored);
+          if (prefs.bpm) setBpm(prefs.bpm);
+          if (prefs.timeSignature) timeSignature.value = prefs.timeSignature;
+          if (prefs.soundType) document.getElementById('soundType').value = prefs.soundType;
+          if (prefs.autoIncrement !== undefined) {
+            autoIncrementEnabled.checked = prefs.autoIncrement;
+            autoIncrementOptions.classList.toggle('visible', prefs.autoIncrement);
+          }
+          if (prefs.incrementAmount) incrementAmount.value = prefs.incrementAmount;
+          if (prefs.incrementInterval) incrementInterval.value = prefs.incrementInterval;
+          if (prefs.incrementMode) incrementMode.value = prefs.incrementMode;
+        }
+      } catch (e) {
+        console.log('Could not load preferences:', e);
+      }
+    }
+    
+    // Add change listeners to save preferences
+    bpmSlider.addEventListener('change', savePrefs);
+    bpmInput.addEventListener('change', savePrefs);
+    timeSignature.addEventListener('change', savePrefs);
+    document.getElementById('soundType').addEventListener('change', savePrefs);
+    autoIncrementEnabled.addEventListener('change', savePrefs);
+    incrementAmount.addEventListener('change', savePrefs);
+    incrementInterval.addEventListener('change', savePrefs);
+    incrementMode.addEventListener('change', savePrefs);
+
     // Initialize
+    loadPrefs();
     updateBeatDots();
   </script>
 </body>
