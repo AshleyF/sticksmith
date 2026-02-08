@@ -33,7 +33,7 @@
       display: flex;
       align-items: center;
       gap: 15px;
-      margin-bottom: 30px;
+      margin-bottom: 20px;
     }
     .bpm-slider {
       flex: 1;
@@ -71,18 +71,42 @@
       border-radius: 6px;
       text-align: center;
     }
-    .control-row {
+    .settings-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+    .setting-group {
       display: flex;
       align-items: center;
-      gap: 15px;
-      margin-bottom: 15px;
+      gap: 8px;
+    }
+    .setting-label {
+      color: #888;
+    }
+    select {
+      padding: 10px 14px;
+      font-size: 1em;
+      background: #222;
+      color: #fff;
+      border: 1px solid #444;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .control-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
     }
     .control-label {
-      min-width: 160px;
       color: #aaa;
+      min-width: 90px;
     }
     .control-input {
-      width: 80px;
+      width: 70px;
       padding: 10px;
       font-size: 1em;
       background: #222;
@@ -93,51 +117,12 @@
     }
     .control-unit {
       color: #666;
-      min-width: 60px;
-    }
-    .toggle-group {
-      display: flex;
-      gap: 0;
-    }
-    .toggle-btn {
-      padding: 10px 20px;
-      background: #222;
-      color: #888;
-      border: 1px solid #444;
-      cursor: pointer;
-      font-size: 1em;
-      transition: all 0.15s;
-    }
-    .toggle-btn:first-child {
-      border-radius: 6px 0 0 6px;
-    }
-    .toggle-btn:last-child {
-      border-radius: 0 6px 6px 0;
-      border-left: none;
-    }
-    .toggle-btn.active {
-      background: #fff;
-      color: #111;
-    }
-    .section {
-      background: #1a1a1a;
-      border: 1px solid #333;
-      border-radius: 8px;
-      padding: 20px;
-      margin-bottom: 20px;
-    }
-    .section-title {
-      font-size: 1.1em;
-      color: #888;
-      margin-bottom: 15px;
-      text-transform: uppercase;
-      letter-spacing: 1px;
     }
     .checkbox-row {
       display: flex;
       align-items: center;
       gap: 10px;
-      margin-bottom: 15px;
+      margin-bottom: 10px;
     }
     .checkbox-row input[type="checkbox"] {
       width: 24px;
@@ -148,6 +133,18 @@
     .checkbox-label {
       color: #ddd;
       cursor: pointer;
+    }
+    .auto-increment-options {
+      display: none;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 15px;
+      margin-top: 10px;
+      margin-bottom: 20px;
+    }
+    .auto-increment-options.visible {
+      display: block;
     }
     .start-btn {
       width: 100%;
@@ -205,6 +202,29 @@
       <input type="number" class="bpm-input" id="bpmInput" min="20" max="300" value="120">
     </div>
 
+    <div class="settings-row">
+      <div class="setting-group">
+        <span class="setting-label">Time</span>
+        <select id="timeSignature">
+          <option value="2">2/4</option>
+          <option value="3">3/4</option>
+          <option value="4" selected>4/4</option>
+          <option value="5">5/4</option>
+          <option value="6">6/8</option>
+          <option value="7">7/8</option>
+        </select>
+      </div>
+      <div class="setting-group">
+        <span class="setting-label">Sound</span>
+        <select id="soundType">
+          <option value="beep">Beep</option>
+          <option value="click">Click</option>
+          <option value="woodblock">Wood Block</option>
+          <option value="cowbell">Cowbell</option>
+        </select>
+      </div>
+    </div>
+
     <div class="beat-indicator" id="beatIndicator">
       <div class="beat-dot"></div>
       <div class="beat-dot"></div>
@@ -212,37 +232,24 @@
       <div class="beat-dot"></div>
     </div>
 
-    <div class="section">
-      <div class="section-title">Auto Increment</div>
-      
-      <div class="checkbox-row">
-        <input type="checkbox" id="autoIncrementEnabled">
-        <label class="checkbox-label" for="autoIncrementEnabled">Enable auto tempo increase</label>
-      </div>
+    <div class="checkbox-row">
+      <input type="checkbox" id="autoIncrementEnabled">
+      <label class="checkbox-label" for="autoIncrementEnabled">Auto tempo increase</label>
+    </div>
 
-      <div class="control-row">
-        <span class="control-label">Starting BPM</span>
-        <input type="number" class="control-input" id="startBpm" min="20" max="300" value="60">
-      </div>
-
+    <div class="auto-increment-options" id="autoIncrementOptions">
       <div class="control-row">
         <span class="control-label">Increment by</span>
         <input type="number" class="control-input" id="incrementAmount" min="1" max="50" value="5">
         <span class="control-unit">BPM</span>
       </div>
-
       <div class="control-row">
         <span class="control-label">Every</span>
         <input type="number" class="control-input" id="incrementInterval" min="1" max="999" value="10">
-        <div class="toggle-group">
-          <button class="toggle-btn active" id="modeBeats" data-mode="beats">beats</button>
-          <button class="toggle-btn" id="modeSeconds" data-mode="seconds">seconds</button>
-        </div>
-      </div>
-
-      <div class="control-row">
-        <span class="control-label">Max BPM</span>
-        <input type="number" class="control-input" id="maxBpm" min="20" max="400" value="200">
+        <select id="incrementMode">
+          <option value="beats">beats</option>
+          <option value="seconds">seconds</option>
+        </select>
       </div>
     </div>
 
@@ -264,26 +271,96 @@
       }
     }
 
-    function playClick(accent = false) {
-      if (!audioCtx) return;
-      
+    // Sound generators
+    function playBeep(accent = false) {
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
-      
       osc.connect(gain);
       gain.connect(audioCtx.destination);
-      
       osc.frequency.value = accent ? 1000 : 800;
       osc.type = 'sine';
-      
       const now = audioCtx.currentTime;
       gain.gain.setValueAtTime(accent ? 0.3 : 0.2, now);
-      gain.gain.exponentialDecayTo ? 
-        gain.gain.exponentialDecayTo(0.001, now + 0.1) :
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
-      
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
       osc.start(now);
       osc.stop(now + 0.1);
+    }
+
+    function playClick(accent = false) {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      const filter = audioCtx.createBiquadFilter();
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.type = 'square';
+      osc.frequency.value = accent ? 2500 : 2000;
+      filter.type = 'highpass';
+      filter.frequency.value = 1000;
+      const now = audioCtx.currentTime;
+      gain.gain.setValueAtTime(accent ? 0.15 : 0.1, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.02);
+      osc.start(now);
+      osc.stop(now + 0.02);
+    }
+
+    function playWoodblock(accent = false) {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      const filter = audioCtx.createBiquadFilter();
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.type = 'sine';
+      const baseFreq = accent ? 800 : 600;
+      osc.frequency.setValueAtTime(baseFreq, audioCtx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(baseFreq * 0.5, audioCtx.currentTime + 0.1);
+      filter.type = 'bandpass';
+      filter.frequency.value = baseFreq;
+      filter.Q.value = 10;
+      const now = audioCtx.currentTime;
+      gain.gain.setValueAtTime(accent ? 0.4 : 0.3, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+      osc.start(now);
+      osc.stop(now + 0.1);
+    }
+
+    function playCowbell(accent = false) {
+      const osc1 = audioCtx.createOscillator();
+      const osc2 = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      const filter = audioCtx.createBiquadFilter();
+      osc1.connect(filter);
+      osc2.connect(filter);
+      filter.connect(gain);
+      gain.connect(audioCtx.destination);
+      // Cowbell uses two detuned square waves
+      osc1.type = 'square';
+      osc2.type = 'square';
+      const baseFreq = accent ? 800 : 560;
+      osc1.frequency.value = baseFreq;
+      osc2.frequency.value = baseFreq * 1.5;
+      filter.type = 'bandpass';
+      filter.frequency.value = baseFreq * 1.2;
+      filter.Q.value = 3;
+      const now = audioCtx.currentTime;
+      gain.gain.setValueAtTime(accent ? 0.2 : 0.15, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+      osc1.start(now);
+      osc2.start(now);
+      osc1.stop(now + 0.3);
+      osc2.stop(now + 0.3);
+    }
+
+    function playSound(accent = false) {
+      if (!audioCtx) return;
+      const soundType = document.getElementById('soundType').value;
+      switch (soundType) {
+        case 'beep': playBeep(accent); break;
+        case 'click': playClick(accent); break;
+        case 'woodblock': playWoodblock(accent); break;
+        case 'cowbell': playCowbell(accent); break;
+      }
     }
 
     // State
@@ -293,7 +370,6 @@
     let startTime = 0;
     let nextBeatTime = 0;
     let timerInterval = null;
-    let incrementMode = 'beats'; // 'beats' or 'seconds'
     let lastIncrementBeat = 0;
     let lastIncrementTime = 0;
 
@@ -304,22 +380,21 @@
     const startBtn = document.getElementById('startBtn');
     const beatIndicator = document.getElementById('beatIndicator');
     const stats = document.getElementById('stats');
+    const timeSignature = document.getElementById('timeSignature');
     
     const autoIncrementEnabled = document.getElementById('autoIncrementEnabled');
-    const startBpmInput = document.getElementById('startBpm');
+    const autoIncrementOptions = document.getElementById('autoIncrementOptions');
     const incrementAmount = document.getElementById('incrementAmount');
     const incrementInterval = document.getElementById('incrementInterval');
-    const maxBpmInput = document.getElementById('maxBpm');
-    const modeBeats = document.getElementById('modeBeats');
-    const modeSeconds = document.getElementById('modeSeconds');
+    const incrementMode = document.getElementById('incrementMode');
 
     // BPM control
     function setBpm(bpm, updateInputs = true) {
-      bpm = Math.max(20, Math.min(400, Math.round(bpm)));
+      bpm = Math.max(20, Math.min(300, Math.round(bpm)));
       currentBpm = bpm;
       bpmDisplay.textContent = bpm;
       if (updateInputs) {
-        bpmSlider.value = Math.min(300, bpm);
+        bpmSlider.value = bpm;
         bpmInput.value = bpm;
       }
     }
@@ -331,47 +406,57 @@
 
     bpmInput.addEventListener('change', () => {
       setBpm(parseInt(bpmInput.value), false);
-      bpmSlider.value = Math.min(300, currentBpm);
+      bpmSlider.value = currentBpm;
     });
 
-    // Mode toggle
-    function setMode(mode) {
-      incrementMode = mode;
-      modeBeats.classList.toggle('active', mode === 'beats');
-      modeSeconds.classList.toggle('active', mode === 'seconds');
+    // Auto increment toggle
+    autoIncrementEnabled.addEventListener('change', () => {
+      autoIncrementOptions.classList.toggle('visible', autoIncrementEnabled.checked);
+    });
+
+    // Time signature - update beat indicator
+    function updateBeatDots() {
+      const beats = parseInt(timeSignature.value);
+      beatIndicator.innerHTML = '';
+      for (let i = 0; i < beats; i++) {
+        const dot = document.createElement('div');
+        dot.className = 'beat-dot';
+        beatIndicator.appendChild(dot);
+      }
     }
 
-    modeBeats.addEventListener('click', () => setMode('beats'));
-    modeSeconds.addEventListener('click', () => setMode('seconds'));
+    timeSignature.addEventListener('change', updateBeatDots);
 
     // Beat indicator
     function updateBeatIndicator(beat) {
+      const beats = parseInt(timeSignature.value);
       const dots = beatIndicator.querySelectorAll('.beat-dot');
       dots.forEach((dot, i) => {
-        dot.classList.toggle('active', i === beat % 4);
+        dot.classList.toggle('active', i === beat % beats);
       });
     }
 
     // Metronome logic
     function tick() {
       const now = performance.now();
+      const beats = parseInt(timeSignature.value);
       
       while (nextBeatTime <= now) {
-        const beatInMeasure = beatCount % 4;
-        playClick(beatInMeasure === 0);
+        const beatInMeasure = beatCount % beats;
+        playSound(beatInMeasure === 0);
         updateBeatIndicator(beatInMeasure);
         
         beatCount++;
         
         // Check for auto increment
-        if (autoIncrementEnabled.checked) {
-          const maxBpm = parseInt(maxBpmInput.value) || 400;
+        if (autoIncrementEnabled.checked && currentBpm < 300) {
           const increment = parseInt(incrementAmount.value) || 5;
           const interval = parseInt(incrementInterval.value) || 10;
+          const mode = incrementMode.value;
           
           let shouldIncrement = false;
           
-          if (incrementMode === 'beats') {
+          if (mode === 'beats') {
             if (beatCount - lastIncrementBeat >= interval) {
               shouldIncrement = true;
               lastIncrementBeat = beatCount;
@@ -384,8 +469,8 @@
             }
           }
           
-          if (shouldIncrement && currentBpm < maxBpm) {
-            setBpm(Math.min(currentBpm + increment, maxBpm));
+          if (shouldIncrement) {
+            setBpm(Math.min(currentBpm + increment, 300));
           }
         }
         
@@ -403,11 +488,6 @@
 
     function start() {
       initAudio();
-      
-      if (autoIncrementEnabled.checked) {
-        const startBpm = parseInt(startBpmInput.value) || 60;
-        setBpm(startBpm);
-      }
       
       isRunning = true;
       beatCount = 0;
@@ -451,7 +531,7 @@
 
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
-      if (e.code === 'Space' && e.target.tagName !== 'INPUT') {
+      if (e.code === 'Space' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT') {
         e.preventDefault();
         if (isRunning) {
           stop();
@@ -482,6 +562,9 @@
         requestWakeLock();
       }
     });
+
+    // Initialize
+    updateBeatDots();
   </script>
 </body>
 </html>
