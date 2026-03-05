@@ -96,18 +96,18 @@
     }
     .control-row {
       display: flex;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
       margin-bottom: 12px;
     }
     .control-label {
       color: #aaa;
-      min-width: 90px;
+      min-width: 80px;
     }
     .control-input {
-      width: 70px;
-      padding: 10px;
+      width: 50px;
+      padding: 8px 4px;
       font-size: 1em;
       background: #222;
       color: #fff;
@@ -172,6 +172,15 @@
       justify-content: center;
       gap: 10px;
       margin: 20px 0;
+      padding: 15px 20px;
+      cursor: pointer;
+      border-radius: 8px;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+      transition: background 0.15s;
+    }
+    .beat-indicator:active {
+      background: rgba(255,255,255,0.05);
     }
     .beat-dot {
       width: 20px;
@@ -179,9 +188,14 @@
       background: #333;
       border-radius: 50%;
       transition: background 0.05s;
+      pointer-events: none;
     }
     .beat-dot.active {
       background: #fff;
+    }
+    .beat-dot.accent {
+      box-shadow: 0 0 6px rgba(255,180,0,0.5);
+      border: 2px solid #fb0;
     }
     .stats {
       text-align: center;
@@ -193,11 +207,11 @@
 </head>
 <body>
   <div class="container">
-    <div class="bpm-display" id="bpmDisplay">120</div>
+    <div class="bpm-display" id="bpmDisplay">100</div>
 
     <div class="bpm-slider-container">
-      <input type="range" class="bpm-slider" id="bpmSlider" min="20" max="300" value="120">
-      <input type="number" class="bpm-input" id="bpmInput" min="20" max="300" value="120">
+      <input type="range" class="bpm-slider" id="bpmSlider" min="20" max="300" value="100">
+      <input type="number" class="bpm-input" id="bpmInput" min="20" max="300" value="100">
     </div>
 
     <div class="settings-row">
@@ -215,8 +229,8 @@
       <div class="setting-group">
         <span class="setting-label">Sound</span>
         <select id="soundType">
+          <option value="click" selected>Click</option>
           <option value="beep">Beep</option>
-          <option value="click">Click</option>
           <option value="woodblock">Wood Block</option>
           <option value="cowbell">Cowbell</option>
         </select>
@@ -238,15 +252,15 @@
     <div class="auto-increment-options" id="autoIncrementOptions">
       <div class="control-row">
         <span class="control-label">Increment by</span>
-        <input type="number" class="control-input" id="incrementAmount" min="1" max="50" value="5">
+        <input type="number" class="control-input" id="incrementAmount" min="1" max="50" value="1">
         <span class="control-unit">BPM</span>
       </div>
       <div class="control-row">
         <span class="control-label">Every</span>
-        <input type="number" class="control-input" id="incrementInterval" min="1" max="999" value="10">
+        <input type="number" class="control-input" id="incrementInterval" min="1" max="999" value="3">
         <select id="incrementMode">
-          <option value="beats">beats</option>
           <option value="seconds" selected>seconds</option>
+          <option value="beats">beats</option>
         </select>
       </div>
     </div>
@@ -269,22 +283,23 @@
       }
     }
 
-    // Sound generators
-    function playBeep(accent = false) {
+    // Sound generators (time parameter enables sample-accurate scheduling)
+    function playBeep(accent = false, time) {
+      const t = time || audioCtx.currentTime;
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
       osc.connect(gain);
       gain.connect(audioCtx.destination);
       osc.frequency.value = accent ? 1000 : 800;
       osc.type = 'sine';
-      const now = audioCtx.currentTime;
-      gain.gain.setValueAtTime(accent ? 0.3 : 0.2, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
-      osc.start(now);
-      osc.stop(now + 0.1);
+      gain.gain.setValueAtTime(accent ? 0.3 : 0.2, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+      osc.start(t);
+      osc.stop(t + 0.1);
     }
 
-    function playClick(accent = false) {
+    function playClick(accent = false, time) {
+      const t = time || audioCtx.currentTime;
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
       const filter = audioCtx.createBiquadFilter();
@@ -295,14 +310,14 @@
       osc.frequency.value = accent ? 2500 : 2000;
       filter.type = 'highpass';
       filter.frequency.value = 1000;
-      const now = audioCtx.currentTime;
-      gain.gain.setValueAtTime(accent ? 0.15 : 0.1, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.02);
-      osc.start(now);
-      osc.stop(now + 0.02);
+      gain.gain.setValueAtTime(accent ? 0.15 : 0.1, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.02);
+      osc.start(t);
+      osc.stop(t + 0.02);
     }
 
-    function playWoodblock(accent = false) {
+    function playWoodblock(accent = false, time) {
+      const t = time || audioCtx.currentTime;
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
       const filter = audioCtx.createBiquadFilter();
@@ -311,19 +326,19 @@
       gain.connect(audioCtx.destination);
       osc.type = 'sine';
       const baseFreq = accent ? 800 : 600;
-      osc.frequency.setValueAtTime(baseFreq, audioCtx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(baseFreq * 0.5, audioCtx.currentTime + 0.1);
+      osc.frequency.setValueAtTime(baseFreq, t);
+      osc.frequency.exponentialRampToValueAtTime(baseFreq * 0.5, t + 0.1);
       filter.type = 'bandpass';
       filter.frequency.value = baseFreq;
       filter.Q.value = 10;
-      const now = audioCtx.currentTime;
-      gain.gain.setValueAtTime(accent ? 0.4 : 0.3, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
-      osc.start(now);
-      osc.stop(now + 0.1);
+      gain.gain.setValueAtTime(accent ? 0.4 : 0.3, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+      osc.start(t);
+      osc.stop(t + 0.1);
     }
 
-    function playCowbell(accent = false) {
+    function playCowbell(accent = false, time) {
+      const t = time || audioCtx.currentTime;
       const osc1 = audioCtx.createOscillator();
       const osc2 = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
@@ -332,7 +347,6 @@
       osc2.connect(filter);
       filter.connect(gain);
       gain.connect(audioCtx.destination);
-      // Cowbell uses two detuned square waves
       osc1.type = 'square';
       osc2.type = 'square';
       const baseFreq = accent ? 800 : 560;
@@ -341,29 +355,28 @@
       filter.type = 'bandpass';
       filter.frequency.value = baseFreq * 1.2;
       filter.Q.value = 3;
-      const now = audioCtx.currentTime;
-      gain.gain.setValueAtTime(accent ? 0.2 : 0.15, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
-      osc1.start(now);
-      osc2.start(now);
-      osc1.stop(now + 0.3);
-      osc2.stop(now + 0.3);
+      gain.gain.setValueAtTime(accent ? 0.2 : 0.15, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+      osc1.start(t);
+      osc2.start(t);
+      osc1.stop(t + 0.3);
+      osc2.stop(t + 0.3);
     }
 
-    function playSound(accent = false) {
+    function playSound(accent = false, time) {
       if (!audioCtx) return;
       const soundType = document.getElementById('soundType').value;
       switch (soundType) {
-        case 'beep': playBeep(accent); break;
-        case 'click': playClick(accent); break;
-        case 'woodblock': playWoodblock(accent); break;
-        case 'cowbell': playCowbell(accent); break;
+        case 'beep': playBeep(accent, time); break;
+        case 'click': playClick(accent, time); break;
+        case 'woodblock': playWoodblock(accent, time); break;
+        case 'cowbell': playCowbell(accent, time); break;
       }
     }
 
     // State
     let isRunning = false;
-    let currentBpm = 120;
+    let currentBpm = 100;
     let beatCount = 0;
     let startTime = 0;
     let nextBeatTime = 0;
@@ -388,12 +401,14 @@
 
     // BPM control
     function setBpm(bpm, updateInputs = true) {
-      bpm = Math.max(20, Math.min(300, Math.round(bpm)));
+      bpm = Math.max(20, Math.min(300, bpm));
       currentBpm = bpm;
-      bpmDisplay.textContent = bpm;
+      const displayBpm = Math.round(bpm * 10) / 10;
+      // Show one decimal only if it's not a whole number
+      bpmDisplay.textContent = displayBpm % 1 === 0 ? displayBpm.toFixed(0) : displayBpm.toFixed(1);
       if (updateInputs) {
-        bpmSlider.value = bpm;
-        bpmInput.value = bpm;
+        bpmSlider.value = Math.round(bpm);
+        bpmInput.value = Math.round(bpm);
       }
     }
 
@@ -419,11 +434,16 @@
       for (let i = 0; i < beats; i++) {
         const dot = document.createElement('div');
         dot.className = 'beat-dot';
+        if (i === 0) dot.classList.add('accent');
         beatIndicator.appendChild(dot);
       }
+      downbeatOffset = 0;
     }
 
     timeSignature.addEventListener('change', updateBeatDots);
+
+    // Track which beat is the downbeat (beat 0 = accent)
+    let downbeatOffset = 0;
 
     // Beat indicator
     function updateBeatIndicator(beat) {
@@ -431,7 +451,76 @@
       const dots = beatIndicator.querySelectorAll('.beat-dot');
       dots.forEach((dot, i) => {
         dot.classList.toggle('active', i === beat % beats);
+        dot.classList.toggle('accent', i === downbeatOffset % beats);
       });
+    }
+
+    // Beat indicator — tap tempo
+    // Tapping the dots works as tap tempo: calculates BPM from tap intervals
+    let tapTimes = [];
+    let tapResetTimeout = null;
+    let lastTapTime = 0;
+
+    beatIndicator.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      handleTapTempo();
+    });
+    beatIndicator.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      handleTapTempo();
+    });
+
+    function handleTapTempo() {
+      const now = performance.now();
+      lastTapTime = now;
+
+      // Reset if last tap was more than 3 seconds ago
+      if (tapTimes.length > 0 && (now - tapTimes[tapTimes.length - 1]) > 3000) {
+        tapTimes = [];
+      }
+
+      tapTimes.push(now);
+      if (tapTimes.length > 16) tapTimes.shift();
+
+      // Play an accented click on each tap
+      initAudio();
+      playSound(true);
+      updateBeatIndicator(0);
+
+      if (tapTimes.length >= 2) {
+        let totalInterval = 0;
+        for (let i = 1; i < tapTimes.length; i++) {
+          totalInterval += tapTimes[i] - tapTimes[i - 1];
+        }
+        const avgInterval = totalInterval / (tapTimes.length - 1);
+        const tappedBpm = 60000 / avgInterval;
+
+        if (tappedBpm >= 20 && tappedBpm <= 300) {
+          setBpm(tappedBpm);
+
+          // Align phase: each tap is beat 1, next tick plays beat 2
+          const beatDuration = 60000 / tappedBpm;
+          nextBeatTime = now + beatDuration;
+          beatCount = 1;
+
+          // If metronome isn't running, start the timer
+          if (!isRunning) {
+            isRunning = true;
+            startTime = now;
+            lastIncrementBeat = 0;
+            lastIncrementTime = now;
+            startBtn.textContent = 'STOP';
+            startBtn.classList.add('running');
+            enableWakeLock();
+            timerInterval = setInterval(tick, 10);
+          }
+
+          savePrefs();
+        }
+      }
+
+      if (tapResetTimeout) clearTimeout(tapResetTimeout);
+      tapResetTimeout = setTimeout(() => { tapTimes = []; }, 5000);
     }
 
     // Metronome logic
@@ -441,8 +530,16 @@
       
       while (nextBeatTime <= now) {
         const beatInMeasure = beatCount % beats;
-        playSound(beatInMeasure === 0);
-        updateBeatIndicator(beatInMeasure);
+
+        // If we're still within one beat interval of a tap, don't play — the tap already clicked.
+        const beatDurationMs = 60000 / currentBpm;
+        const timeSinceLastTap = now - lastTapTime;
+        const tappingActive = lastTapTime > 0 && timeSinceLastTap < beatDurationMs * 1.1;
+
+        if (!tappingActive) {
+          playSound(beatInMeasure === 0);
+          updateBeatIndicator(beatInMeasure);
+        }
         
         beatCount++;
         
@@ -469,6 +566,7 @@
           
           if (shouldIncrement) {
             setBpm(Math.min(currentBpm + increment, 300));
+            savePrefs();
           }
         }
         
@@ -496,6 +594,7 @@
       
       startBtn.textContent = 'STOP';
       startBtn.classList.add('running');
+      enableWakeLock();
       
       tick(); // First beat immediately
       timerInterval = setInterval(tick, 10);
@@ -511,6 +610,7 @@
       
       startBtn.textContent = 'START';
       startBtn.classList.remove('running');
+      disableWakeLock();
       
       // Reset beat indicator
       const dots = beatIndicator.querySelectorAll('.beat-dot');
@@ -531,33 +631,74 @@
     document.addEventListener('keydown', (e) => {
       if (e.code === 'Space' && e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT') {
         e.preventDefault();
-        if (isRunning) {
-          stop();
-        } else {
-          start();
-        }
+        startBtn.click();
       }
     });
 
-    // Wake Lock to prevent device from sleeping
+    // Wake Lock: prevent device from sleeping while metronome is running
+    // Uses Wake Lock API where available, with silent-video fallback for iOS Safari
     let wakeLock = null;
-    async function requestWakeLock() {
+    let noSleepVideo = null;
+
+    function createNoSleepVideo() {
+      // Tiny silent MP4 video — tricks the browser into thinking media is playing
+      const video = document.createElement('video');
+      video.setAttribute('playsinline', '');
+      video.setAttribute('webkit-playsinline', '');
+      video.setAttribute('muted', '');
+      video.style.position = 'fixed';
+      video.style.top = '-1px';
+      video.style.left = '-1px';
+      video.style.width = '1px';
+      video.style.height = '1px';
+      video.style.opacity = '0.01';
+      // Smallest valid silent MP4 (base64)
+      video.src = 'data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAAAAhtZGF0AAAA1m1vb3YAAABsbXZoZAAAAAAAAAAAAAAAAAAAA+gAAAAAAAEAAAEAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAABidWR0YQAAAFptZXRhAAAAAAAAACFoZGxyAAAAAAAAAABtZGlyYXBwbAAAAAAAAAAAAAAAAC1pbHN0AAAAJal0b28AAAAdZGF0YQAAAAEAAAAATGF2ZjYwLjMuMTAw';
+      video.loop = true;
+      return video;
+    }
+
+    async function enableWakeLock() {
+      // Try Wake Lock API first (Chrome, Edge, etc.)
       try {
         if ('wakeLock' in navigator) {
           wakeLock = await navigator.wakeLock.request('screen');
           wakeLock.addEventListener('release', () => {
             console.log('Wake Lock released');
           });
+          console.log('Wake Lock acquired');
+          return;
         }
       } catch (err) {
-        console.log('Wake Lock error:', err.message);
+        console.log('Wake Lock API error:', err.message);
+      }
+      // Fallback: silent video trick (iOS Safari and others)
+      try {
+        if (!noSleepVideo) {
+          noSleepVideo = createNoSleepVideo();
+          document.body.appendChild(noSleepVideo);
+        }
+        await noSleepVideo.play();
+        console.log('NoSleep video playing');
+      } catch (err) {
+        console.log('NoSleep video error:', err.message);
       }
     }
-    
-    requestWakeLock();
+
+    function disableWakeLock() {
+      if (wakeLock) {
+        wakeLock.release();
+        wakeLock = null;
+      }
+      if (noSleepVideo) {
+        noSleepVideo.pause();
+      }
+    }
+
+    // Re-acquire wake lock when returning to page (OS releases it on tab switch)
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') {
-        requestWakeLock();
+      if (document.visibilityState === 'visible' && isRunning) {
+        enableWakeLock();
       }
     });
 
