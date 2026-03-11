@@ -12,22 +12,23 @@
       color: #fff;
       font-family: sans-serif;
       min-height: 100vh;
+      min-height: 100dvh;
       box-sizing: border-box;
-    }
-    h1 {
-      margin: 0 0 20px 0;
-      font-size: 2em;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
     .container {
-      max-width: 600px;
-      margin: 0 auto;
+      width: 100%;
+      max-width: 500px;
     }
     .bpm-display {
-      font-size: 8em;
       font-weight: bold;
       text-align: center;
-      margin: 20px 0;
+      margin: 10px 0;
       font-variant-numeric: tabular-nums;
+      line-height: 1;
+      white-space: nowrap;
     }
     .bpm-slider-container {
       display: flex;
@@ -61,15 +62,23 @@
       cursor: pointer;
       border: none;
     }
-    .bpm-input {
-      width: 80px;
-      padding: 10px;
-      font-size: 1.2em;
+    .bpm-btn {
+      width: 48px;
+      height: 48px;
+      font-size: 1.5em;
+      font-weight: bold;
       background: #222;
       color: #fff;
       border: 1px solid #444;
-      border-radius: 6px;
-      text-align: center;
+      border-radius: 50%;
+      cursor: pointer;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .bpm-btn:active {
+      background: #444;
     }
     .settings-row {
       display: flex;
@@ -210,8 +219,9 @@
     <div class="bpm-display" id="bpmDisplay">100</div>
 
     <div class="bpm-slider-container">
+      <button class="bpm-btn" id="bpmMinus">&minus;</button>
       <input type="range" class="bpm-slider" id="bpmSlider" min="20" max="300" value="100">
-      <input type="number" class="bpm-input" id="bpmInput" min="20" max="300" value="100">
+      <button class="bpm-btn" id="bpmPlus">+</button>
     </div>
 
     <div class="settings-row">
@@ -387,7 +397,8 @@
     // DOM elements
     const bpmDisplay = document.getElementById('bpmDisplay');
     const bpmSlider = document.getElementById('bpmSlider');
-    const bpmInput = document.getElementById('bpmInput');
+    const bpmMinus = document.getElementById('bpmMinus');
+    const bpmPlus = document.getElementById('bpmPlus');
     const startBtn = document.getElementById('startBtn');
     const beatIndicator = document.getElementById('beatIndicator');
     const stats = document.getElementById('stats');
@@ -399,32 +410,62 @@
     const incrementInterval = document.getElementById('incrementInterval');
     const incrementMode = document.getElementById('incrementMode');
 
+    // Fit BPM text to fill container width without overflowing viewport height
+    function fitBpmText() {
+      const container = bpmDisplay.parentElement;
+      const containerWidth = container.clientWidth;
+      const viewportHeight = window.innerHeight;
+
+      // Binary search for the largest font size that fits width
+      const MIN_SIZE = 48;
+      let lo = MIN_SIZE, hi = 500;
+      while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        bpmDisplay.style.fontSize = mid + 'px';
+        if (bpmDisplay.scrollWidth <= containerWidth) {
+          lo = mid;
+        } else {
+          hi = mid;
+        }
+      }
+      bpmDisplay.style.fontSize = lo + 'px';
+
+      // Now shrink if the page overflows the viewport vertically
+      while (document.documentElement.scrollHeight > viewportHeight && lo > MIN_SIZE) {
+        lo -= 2;
+        bpmDisplay.style.fontSize = lo + 'px';
+      }
+    }
+    window.addEventListener('resize', fitBpmText);
+
     // BPM control
     function setBpm(bpm, updateInputs = true) {
-      bpm = Math.max(20, Math.min(300, bpm));
+      bpm = Math.max(20, Math.min(300, Math.round(bpm)));
       currentBpm = bpm;
-      const displayBpm = Math.round(bpm * 10) / 10;
-      // Show one decimal only if it's not a whole number
-      bpmDisplay.textContent = displayBpm % 1 === 0 ? displayBpm.toFixed(0) : displayBpm.toFixed(1);
+      bpmDisplay.textContent = bpm;
+      fitBpmText();
       if (updateInputs) {
-        bpmSlider.value = Math.round(bpm);
-        bpmInput.value = Math.round(bpm);
+        bpmSlider.value = bpm;
       }
     }
 
     bpmSlider.addEventListener('input', () => {
       setBpm(parseInt(bpmSlider.value), false);
-      bpmInput.value = currentBpm;
     });
 
-    bpmInput.addEventListener('change', () => {
-      setBpm(parseInt(bpmInput.value), false);
-      bpmSlider.value = currentBpm;
+    bpmMinus.addEventListener('click', () => {
+      setBpm(currentBpm - 1);
+      savePrefs();
+    });
+    bpmPlus.addEventListener('click', () => {
+      setBpm(currentBpm + 1);
+      savePrefs();
     });
 
     // Auto increment toggle
     autoIncrementEnabled.addEventListener('change', () => {
       autoIncrementOptions.classList.toggle('visible', autoIncrementEnabled.checked);
+      fitBpmText();
     });
 
     // Time signature - update beat indicator
@@ -493,7 +534,7 @@
           totalInterval += tapTimes[i] - tapTimes[i - 1];
         }
         const avgInterval = totalInterval / (tapTimes.length - 1);
-        const tappedBpm = 60000 / avgInterval;
+        const tappedBpm = Math.round(60000 / avgInterval);
 
         if (tappedBpm >= 20 && tappedBpm <= 300) {
           setBpm(tappedBpm);
@@ -741,7 +782,6 @@
     
     // Add change listeners to save preferences
     bpmSlider.addEventListener('change', savePrefs);
-    bpmInput.addEventListener('change', savePrefs);
     timeSignature.addEventListener('change', savePrefs);
     document.getElementById('soundType').addEventListener('change', savePrefs);
     autoIncrementEnabled.addEventListener('change', savePrefs);
@@ -751,6 +791,7 @@
 
     // Initialize
     loadPrefs();
+    fitBpmText();
     updateBeatDots();
   </script>
 </body>
