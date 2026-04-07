@@ -212,6 +212,12 @@
       font-size: 0.9em;
       margin-top: 10px;
     }
+    .vibrate-warning {
+      width: 100%;
+      color: #f90;
+      font-size: 0.85em;
+      margin-top: 4px;
+    }
   </style>
 </head>
 <body>
@@ -243,8 +249,10 @@
           <option value="beep">Beep</option>
           <option value="woodblock">Wood Block</option>
           <option value="cowbell">Cowbell</option>
+          <option value="vibrate">Vibrate</option>
         </select>
       </div>
+      <div id="vibrateWarning" class="vibrate-warning" style="display:none;">Vibration not supported on this device</div>
     </div>
 
     <div class="beat-indicator" id="beatIndicator">
@@ -373,9 +381,23 @@
       osc2.stop(t + 0.3);
     }
 
+    function playVibrate(accent = false) {
+      if (!navigator.vibrate) return;
+      if (accent) {
+        // Stronger pulse for accent: vibrate-pause-vibrate
+        navigator.vibrate([40, 30, 40]);
+      } else {
+        navigator.vibrate(30);
+      }
+    }
+
     function playSound(accent = false, time) {
-      if (!audioCtx) return;
       const soundType = document.getElementById('soundType').value;
+      if (soundType === 'vibrate') {
+        playVibrate(accent);
+        return;
+      }
+      if (!audioCtx) return;
       switch (soundType) {
         case 'beep': playBeep(accent, time); break;
         case 'click': playClick(accent, time); break;
@@ -780,10 +802,21 @@
       }
     }
     
+    // Show warning when vibrate is selected but not supported
+    const vibrateWarning = document.getElementById('vibrateWarning');
+    function checkVibrateWarning() {
+      const isVibrate = document.getElementById('soundType').value === 'vibrate';
+      const supported = !!navigator.vibrate;
+      vibrateWarning.style.display = (isVibrate && !supported) ? 'block' : 'none';
+    }
+
     // Add change listeners to save preferences
     bpmSlider.addEventListener('change', savePrefs);
     timeSignature.addEventListener('change', savePrefs);
-    document.getElementById('soundType').addEventListener('change', savePrefs);
+    document.getElementById('soundType').addEventListener('change', () => {
+      checkVibrateWarning();
+      savePrefs();
+    });
     autoIncrementEnabled.addEventListener('change', savePrefs);
     incrementAmount.addEventListener('change', savePrefs);
     incrementInterval.addEventListener('change', savePrefs);
@@ -791,6 +824,7 @@
 
     // Initialize
     loadPrefs();
+    checkVibrateWarning();
     fitBpmText();
     updateBeatDots();
   </script>
