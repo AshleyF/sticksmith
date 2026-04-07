@@ -218,6 +218,20 @@
       font-size: 0.85em;
       margin-top: 4px;
     }
+    .screen-flash {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: transparent;
+      transition: background 0.04s;
+      z-index: 9999;
+    }
+    .screen-flash.accent {
+      background: rgba(255, 180, 0, 0.25);
+    }
+    .screen-flash.normal {
+      background: rgba(255, 255, 255, 0.12);
+    }
   </style>
 </head>
 <body>
@@ -250,9 +264,10 @@
           <option value="woodblock">Wood Block</option>
           <option value="cowbell">Cowbell</option>
           <option value="vibrate">Vibrate</option>
+          <option value="flash">Flash</option>
         </select>
       </div>
-      <div id="vibrateWarning" class="vibrate-warning" style="display:none;">Vibration not supported on this device</div>
+      <div id="vibrateWarning" class="vibrate-warning" style="display:none;">⚠ Vibration requires an Android phone or tablet. Try Flash for a silent visual metronome.</div>
     </div>
 
     <div class="beat-indicator" id="beatIndicator">
@@ -288,6 +303,7 @@
     <div class="stats" id="stats"></div>
   </div>
 
+  <div class="screen-flash" id="screenFlash"></div>
   <script>
     // Audio context and sounds
     let audioCtx = null;
@@ -381,10 +397,32 @@
       osc2.stop(t + 0.3);
     }
 
+    // Vibration support detection — navigator.vibrate exists on desktop
+    // browsers but silently does nothing. Only trust it on actual mobile devices.
+    function deviceCanVibrate() {
+      if (!navigator.vibrate) return false;
+      // Modern API: navigator.userAgentData.mobile (Chrome 93+)
+      if (navigator.userAgentData && navigator.userAgentData.mobile !== undefined) {
+        return navigator.userAgentData.mobile;
+      }
+      // Fallback: UA string sniffing for mobile indicators
+      return /Android|iPhone|iPad|iPod|Mobile|webOS|BlackBerry|Opera Mini|IEMobile/i.test(navigator.userAgent);
+    }
+
+    const screenFlash = document.getElementById('screenFlash');
+    let flashTimeout = null;
+
+    function playFlash(accent = false) {
+      if (flashTimeout) clearTimeout(flashTimeout);
+      screenFlash.className = 'screen-flash ' + (accent ? 'accent' : 'normal');
+      flashTimeout = setTimeout(() => {
+        screenFlash.className = 'screen-flash';
+      }, 60);
+    }
+
     function playVibrate(accent = false) {
       if (!navigator.vibrate) return;
       if (accent) {
-        // Stronger pulse for accent: vibrate-pause-vibrate
         navigator.vibrate([40, 30, 40]);
       } else {
         navigator.vibrate(30);
@@ -395,6 +433,10 @@
       const soundType = document.getElementById('soundType').value;
       if (soundType === 'vibrate') {
         playVibrate(accent);
+        return;
+      }
+      if (soundType === 'flash') {
+        playFlash(accent);
         return;
       }
       if (!audioCtx) return;
@@ -802,12 +844,11 @@
       }
     }
     
-    // Show warning when vibrate is selected but not supported
+    // Show warning when vibrate is selected but device can't actually vibrate
     const vibrateWarning = document.getElementById('vibrateWarning');
     function checkVibrateWarning() {
       const isVibrate = document.getElementById('soundType').value === 'vibrate';
-      const supported = !!navigator.vibrate;
-      vibrateWarning.style.display = (isVibrate && !supported) ? 'block' : 'none';
+      vibrateWarning.style.display = (isVibrate && !deviceCanVibrate()) ? 'block' : 'none';
     }
 
     // Add change listeners to save preferences
